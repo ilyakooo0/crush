@@ -201,245 +201,271 @@ func trimGlamourMargins(s string) string {
 // we have the slightest doubt we return -1 and let the caller fall
 // back to a full render.
 //
-// Decision tree, in order of preference (latest boundary wins):
+// The implementation is a single O(n) forward scan
+// ([scanSafeBoundaries]) that tracks block state across the whole
+// document: fenced-code toggle, list open/close depth, HTML-block
+// opener, and link-reference-definition presence. State is updated
+// per line, so every blank-line candidate is evaluated against
+// already-computed state in O(1) — no re-scanning of the prefix.
 //
-//  1. Walk backward through every "blank line" position p such that
-//     content[:p] ends with "\n\n" (or "\n[ \t]*\n").
-//  2. For each candidate, check that content[:p] has an even
-//     number of triple-backtick fence lines (no open fenced
-//     block). Any odd count means we'd be cutting inside a fence
-//     and mis-syntax-highlighting the trailing partial.
-//     2b. Reject if any line in content[:p] (outside fenced blocks)
-//     is a list-marker line, an HTML-block opener, or a link
-//     reference definition. See [prefixHasOpenHazard] for the
-//     reasoning behind these "anywhere in prefix" rejects.
-//  3. Reject if the last non-blank line of content[:p] is:
-//     - a list item marker line ("^\s*([-*+]|\d+\.)\s")
-//     - a table line (contains "|")
-//     - a block quote ("^\s*>")
-//     - a setext header underline ("^=+\s*$" or "^-+\s*$")
-//     - an indented code line (4+ leading spaces or a tab)
-//  4. Reject if the line immediately AFTER the boundary (skipping
-//     leading blank lines) looks like a setext underline (a line
-//     of '=' or '-' only). Rendering the prefix as a paragraph
-//     would change once the underline arrived; that's exactly the
-//     "splitting changes the prefix render" hazard §4.4 calls out.
+// Closure-aware list tracking (B1) replaces the prior "any list
+// marker anywhere → reject" rule. A list is considered open from
+// the first marker line until a blank line is followed by a
+// non-continuation, non-marker line at the same or shallower
+// indent. Once closed, prefixes ending after the close are
+// accepted, so the incremental cache resumes working for the
+// paragraphs that follow a list — the common case in LLM reasoning
+// traces. On any ambiguity the list is kept open (conservative —
+// falls back to -1).
+//
+// B2 (HTML block) and B3 (link reference definition) remain
+// anywhere-in-prefix rejects: the typical assistant output
+// contains neither, so the perf cost is zero in the common case.
 //
 // Returns the byte offset of the first character AFTER the blank
 // line, i.e. the start of the trailing segment.
 func findSafeMarkdownBoundary(content string) int {
+	boundaries := scanSafeBoundaries(content)
+	if len(boundaries) == 0 {
+		return -1
+	}
+	return boundaries[len(boundaries)-1]
+}
+
+// scanSafeBoundaries walks content once, O(n), tracking block
+// state, and returns the byte offsets of every safe stable-prefix
+// boundary in increasing order. A boundary is the byte offset
+// immediately after a blank-line separator at which content[:p]
+// can be rendered independently of content[p:].
+//
+// State carried across the scan:
+//
+//   - inFence: toggled by each fence line. While true, no boundary
+//     is safe (we're inside a fenced code block) and list/html/ref
+//     detection is skipped so code-block contents don't false-
+//     trigger the hazards.
+//   - listDepth: current open-list nesting. Incremented on a
+//     marker line, decremented on closure (see below). A boundary
+//     is only safe when listDepth == 0 (no list open).
+//   - sawHTMLBlock / sawLinkRef: anywhere-in-prefix flags for B2
+//     and B3. Once set they never clear — the prefix is
+//     permanently unsafe for splitting.
+//   - prevNonBlank: the last non-blank line seen before the
+//     current candidate, for the last-line check
+//     ([lineOpensConstruct]).
+//
+// Each blank-line candidate is evaluated in O(1) against the
+// already-computed state, so the full scan is O(lines) regardless
+// of how many candidates exist. This replaces the prior O(n²)
+// backward search that re-scanned the prefix for every candidate.
+//
+// List closure detection (B1 fix): a list opens on any marker line
+// when no list is open. A list closes when, after a blank line, a
+// non-marker line appears at indent < listBaseIndent+2 (not a
+// continuation paragraph). On any ambiguity the list is kept open
+// (conservative — falls back to -1). This replaces the prior "any
+// list marker anywhere → reject" rule, so boundaries after a
+// closed list followed by paragraphs are accepted — the common
+// case in LLM reasoning traces.
+//
+// Crucially, boundary evaluation happens BEFORE the state update
+// for the current line: the boundary at the start of line L has
+// prefix = content[:L], so the state must reflect everything
+// BEFORE L, not including L's effects. For example, the boundary
+// at the start of a fence-opening line is safe (the fence hasn't
+// opened in the prefix yet); the boundary at the start of a list-
+// marker line is safe (the list hasn't opened in the prefix yet).
+func scanSafeBoundaries(content string) []int {
 	if len(content) == 0 {
-		return -1
+		return nil
 	}
 
-	// Iterate every blank-line position from latest to earliest.
-	for p := blankLineBefore(content, len(content)); p > 0; p = blankLineBefore(content, p-1) {
-		if !isSafeBoundaryAt(content, p) {
-			continue
-		}
-		return p
-	}
-	return -1
-}
-
-// blankLineBefore returns the byte offset of the first character
-// AFTER the latest blank-line separator that ends strictly before
-// `until`. A blank-line separator is a sequence "\n([ \t]*\n)+"
-// — one newline, then one or more lines containing only spaces or
-// tabs and terminated by another newline. The returned offset is
-// the start of the first non-blank line that follows the
-// separator (or the position immediately after the final newline,
-// if no further content remains).
-//
-// Returns -1 when no blank-line separator exists before `until`.
-func blankLineBefore(content string, until int) int {
-	if until <= 0 {
-		return -1
-	}
-	// Walk backward looking for a newline followed (after optional
-	// blank-line content) by another newline. We track the latest
-	// newline we've seen; if the next earlier newline has only
-	// blank chars between them, we have a blank-line separator
-	// and the boundary sits immediately after the latest newline.
-	end := until
-	for end > 0 {
-		nl := strings.LastIndexByte(content[:end], '\n')
-		if nl < 0 {
-			return -1
-		}
-		// Look for an earlier newline whose gap to nl is empty
-		// or whitespace only.
-		prev := strings.LastIndexByte(content[:nl], '\n')
-		for prev >= 0 {
-			gap := content[prev+1 : nl]
-			if isBlankOrSpaces(gap) {
-				return nl + 1
-			}
-			// Gap had non-whitespace; nl is not a blank-line
-			// separator. Move up: try with the earlier newline as
-			// the new "nl" candidate.
-			break
-		}
-		end = nl
-	}
-	return -1
-}
-
-// isBlankOrSpaces reports whether s consists entirely of spaces
-// and tabs (or is empty).
-func isBlankOrSpaces(s string) bool {
-	for i := range len(s) {
-		if s[i] != ' ' && s[i] != '\t' {
-			return false
-		}
-	}
-	return true
-}
-
-// isSafeBoundaryAt reports whether content[:p] is a safe stable
-// prefix. p must be a blank-line boundary (start of a line, with a
-// blank line immediately preceding).
-//
-// Beyond the last-line checks, three "anywhere in the prefix"
-// hazards force a reject because they cannot be reliably reasoned
-// about by inspecting the trailing line alone. For each of these
-// the simplest, safest rule was chosen — see prefixHasOpenHazard.
-func isSafeBoundaryAt(content string, p int) bool {
-	prefix := content[:p]
-
-	// (2) Even number of triple-backtick fence lines.
-	if countFenceLines(prefix)%2 != 0 {
-		return false
-	}
-
-	// (2b) Anywhere-in-prefix hazards: open list (B1), HTML block
-	// opener (B2), reference link definition (B3). Any of these
-	// anywhere in the prefix forces a fallback.
-	if prefixHasOpenHazard(prefix) {
-		return false
-	}
-
-	// (3) Inspect the last non-blank line of the prefix.
-	lastLine := lastNonBlankLine(prefix)
-	if lastLine != "" && lineOpensConstruct(lastLine) {
-		return false
-	}
-
-	// (4) If anything follows, make sure it doesn't look like a
-	// setext underline that would retroactively turn the last
-	// paragraph of the prefix into a header.
-	if rest := content[p:]; rest != "" {
-		first := firstNonBlankLine(rest)
-		if isSetextUnderlineCandidate(first) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// prefixHasOpenHazard reports whether prefix contains any of three
-// constructs that cannot be safely cut at a blank-line boundary
-// even when the immediately preceding line looks fine. Each check
-// uses the SIMPLEST viable conservative rule per the F8 round-2
-// review:
-//
-//	B1 (loose lists). A loose list has a blank line between an item
-//	   and a continuation paragraph that begins with indentation
-//	   but no list marker. If a candidate boundary lands on that
-//	   blank line, the prefix's trailing non-blank line is the
-//	   continuation paragraph, NOT a list marker, so the last-line
-//	   check would accept it even though the list is still open.
-//
-//	   Rule chosen: any list-marker line ANYWHERE in the prefix
-//	   forces -1. This is overly conservative — it forfeits
-//	   boundary advancement past a closed list — but it eliminates
-//	   the entire bug class with zero parsing of CommonMark's
-//	   loose-list closure semantics. We retain the most useful
-//	   boundary in practice: the one BEFORE the list opens (no
-//	   marker has appeared in the prefix yet).
-//
-//	B2 (HTML blocks). CommonMark defines seven HTML-block opener
-//	   patterns (script/pre/style/textarea, comments, processing
-//	   instructions, CDATA, declarations, recognised tag names).
-//	   If the prefix opens an HTML block that the suffix closes,
-//	   splitting renders the prefix as raw HTML and the suffix as
-//	   prose.
-//
-//	   Rule chosen: any HTML-block opener anywhere in the prefix
-//	   forces -1. Same trade-off as B1 — the typical assistant
-//	   output contains no raw HTML, so the perf cost is zero in
-//	   the common case.
-//
-//	B3 (reference link definitions). A line of the form
-//	   "[label]: <url>" defines a link reference that the suffix
-//	   may later use as "[text][label]". Splitting the document
-//	   loses the definition because each half is rendered as an
-//	   independent glamour document.
-//
-//	   Rule chosen: any reference link definition line anywhere in
-//	   the prefix forces -1. Suffix-side reference detection is
-//	   fragile (three syntaxes: [text][label], [label][], [label]),
-//	   so the prefix-side check is the simpler safe choice.
-//
-// All three rules accept the perf hit of "no boundary after a
-// list / HTML block / link def" in exchange for guaranteed
-// soundness. If profiling shows this kills the F8 win on real
-// streaming traces, the next iteration can promote each rule to
-// its less-conservative variant (closure-aware list tracking,
-// per-tag HTML close detection, suffix-aware ref tracking).
-func prefixHasOpenHazard(prefix string) bool {
+	var boundaries []int
+	var prevNonBlank string
 	inFence := false
-	for line := range splitLines(prefix) {
-		// Track fenced state so list/html/ref patterns inside a
-		// fenced code block do not falsely trigger the hazards.
+	listDepth := 0
+	sawHTMLBlock := false
+	sawLinkRef := false
+
+	// listBaseIndent is the indent column of the innermost open
+	// list's markers. Used for closure detection: a non-marker
+	// line at indent < listBaseIndent+2 after a blank line closes
+	// the list.
+	listBaseIndent := 0
+
+	// blankPending tracks whether the line immediately before the
+	// current line was blank. A boundary candidate exists at the
+	// start of the first non-blank line after a blank line.
+	blankPending := false
+
+	// processLine handles one line (without its newline
+	// terminator) starting at byte offset off. It evaluates any
+	// pending boundary candidate, then updates block state for
+	// the line.
+	//
+	// Boundary evaluation happens BEFORE the state update for the
+	// current line: the boundary at the start of line L has
+	// prefix = content[:off], so the state must reflect everything
+	// BEFORE L. However, when an open list CLOSES at line L (L is
+	// a non-marker, dedented line after a blank line), the prefix
+	// contains a COMPLETE list — the boundary is safe even though
+	// listDepth is still > 0 in the pre-L state. We compute
+	// listClosesHere before evaluation and pass it as an override.
+	processLine := func(line string, off int) {
+		blank := strings.TrimRight(line, " \t") == ""
+
+		if blank {
+			blankPending = true
+			return
+		}
+
+		trimmed := strings.TrimLeft(line, " \t")
+		indent := len(line) - len(trimmed)
+		isMarker := isListItemMarker(trimmed)
+
+		// Compute whether this line closes the open list.
+		// A list closes when a blank line is followed by a
+		// non-marker line at indent < listBaseIndent+2 (not
+		// a continuation paragraph).
+		listClosesHere := false
+		if listDepth > 0 && blankPending && !isMarker && indent < listBaseIndent+2 {
+			listClosesHere = true
+		}
+
+		// Non-blank line. If a blank line preceded, this is a
+		// boundary candidate at offset `off`. Evaluate BEFORE
+		// updating state — the prefix is content[:off].
+		if blankPending {
+			if isSafeBoundaryState(inFence, listDepth, listClosesHere, sawHTMLBlock, sawLinkRef, prevNonBlank, trimmed) {
+				boundaries = append(boundaries, off)
+			}
+			blankPending = false
+		}
+
+		// Now update state for this line.
 		if isFenceLine(line) {
 			inFence = !inFence
-			continue
+			prevNonBlank = line
+			return
 		}
+
 		if inFence {
-			continue
+			prevNonBlank = line
+			return
 		}
-		trimmed := strings.TrimLeft(line, " \t")
-		if trimmed == "" {
-			continue
+
+		// Update list depth (closure-aware B1).
+		switch {
+		case listDepth == 0 && isMarker:
+			listDepth = 1
+			listBaseIndent = indent
+		case listDepth > 0 && isMarker:
+			switch {
+			case indent > listBaseIndent:
+				// Nested list opens.
+				listDepth++
+				listBaseIndent = indent
+			case indent < listBaseIndent:
+				// Marker at shallower indent: close
+				// current list. If an outer list
+				// existed we'd need its base indent;
+				// we don't track the stack, so be
+				// conservative and close everything,
+				// then open a new list at this indent.
+				listDepth = 1
+				listBaseIndent = indent
+			}
+			// Same indent: another item, depth unchanged.
+		case listDepth > 0 && !isMarker && blankPending:
+			// Blank line then non-marker line: check for
+			// closure. A continuation paragraph is indented
+			// 2+ relative to the marker.
+			if indent < listBaseIndent+2 {
+				// Dedent: list closed. Be conservative
+				// and close all nesting levels.
+				listDepth = 0
+			}
+			// Otherwise: continuation, list stays open.
 		}
-		// B1: any list-item marker.
-		if isListItemMarker(trimmed) {
-			return true
+		// listDepth > 0 && !isMarker && !blankPending:
+		//   A non-marker line directly after another line
+		//   (no blank line between). This is either a lazy
+		//   continuation or part of a tight list's item.
+		//   Keep the list open (conservative).
+
+		// B2: HTML block opener (anywhere in prefix).
+		if !sawHTMLBlock && isHTMLBlockOpener(line) {
+			sawHTMLBlock = true
 		}
-		// B2: HTML block opener.
-		if isHTMLBlockOpener(line) {
-			return true
+		// B3: link reference definition (anywhere in prefix).
+		if !sawLinkRef && isLinkRefDefinition(line) {
+			sawLinkRef = true
 		}
-		// B3: link reference definition.
-		if isLinkRefDefinition(line) {
-			return true
-		}
+
+		prevNonBlank = line
 	}
-	return false
+
+	start := 0
+	for i := 0; i < len(content); i++ {
+		if content[i] != '\n' {
+			continue
+		}
+		processLine(content[start:i], start)
+		start = i + 1
+	}
+	// Process the trailing segment (content after the last '\n').
+	// A non-blank trailing line after a blank line is a valid
+	// boundary candidate. A blank trailing line is irrelevant.
+	if start < len(content) {
+		processLine(content[start:], start)
+	}
+
+	return boundaries
 }
 
-// countFenceLines counts lines that begin a fenced code block in
-// the CommonMark sense: a line whose first non-whitespace run is
-// at least three consecutive backticks (or tildes). Each such
-// line toggles the fenced state, so an even count means every
-// opened fence has been closed.
+// isSafeBoundaryState evaluates the safety of a boundary candidate
+// given the block state computed by the forward scan (reflecting
+// everything BEFORE the boundary line). All state is passed in
+// explicitly so this helper stays pure and testable.
 //
-// We accept up to three leading spaces of indentation (CommonMark
-// rule) and require the fence characters to be the FIRST
-// non-whitespace content of the line. We deliberately do NOT
-// attempt to parse info-strings or differentiate opener from
-// closer beyond toggling — a closing fence is just any line
-// whose first non-whitespace run is >=3 of the same fence char.
-func countFenceLines(s string) int {
-	n := 0
-	for line := range splitLines(s) {
-		if isFenceLine(line) {
-			n++
-		}
+//	nextLineTrimmed is the first non-blank line of the suffix
+//	(already left-trimmed), used for the setext-underline check
+//	(rule 4). listClosesHere reports whether the next line closes
+//	the currently-open list; when true, the prefix contains a
+//	complete list and the boundary is safe even though listDepth
+//	is non-zero in the pre-line state.
+func isSafeBoundaryState(inFence bool, listDepth int, listClosesHere, sawHTMLBlock, sawLinkRef bool, prevNonBlank, nextLineTrimmed string) bool {
+	// (2) Not inside a fence.
+	if inFence {
+		return false
 	}
-	return n
+	// (B1) No open list, unless the next line closes it.
+	if listDepth != 0 && !listClosesHere {
+		return false
+	}
+	// (B2) No HTML block opener anywhere in the prefix.
+	if sawHTMLBlock {
+		return false
+	}
+	// (B3) No link reference definition anywhere in the prefix.
+	if sawLinkRef {
+		return false
+	}
+	// (3) The last non-blank line of the prefix must not keep a
+	// construct open. When the list closes at the next line, the
+	// prefix's last non-blank line is a list marker — that's
+	// expected and safe because the list is complete, so skip
+	// the check in that case.
+	if !listClosesHere && prevNonBlank != "" && lineOpensConstruct(prevNonBlank) {
+		return false
+	}
+	// (4) The first non-blank line of the suffix must not look
+	// like a setext underline that would retroactively turn the
+	// last paragraph of the prefix into a header.
+	if isSetextUnderlineCandidate(nextLineTrimmed) {
+		return false
+	}
+	return true
 }
 
 // isFenceLine reports whether line opens or closes a fenced code
@@ -463,48 +489,6 @@ func isFenceLine(line string) bool {
 		run++
 	}
 	return run >= 3
-}
-
-// lastNonBlankLine returns the last non-blank line of s, or ""
-// when every line is blank.
-func lastNonBlankLine(s string) string {
-	last := ""
-	for line := range splitLines(s) {
-		if strings.TrimSpace(line) != "" {
-			last = line
-		}
-	}
-	return last
-}
-
-// firstNonBlankLine returns the first non-blank line of s, or ""
-// when every line is blank.
-func firstNonBlankLine(s string) string {
-	for line := range splitLines(s) {
-		if strings.TrimSpace(line) != "" {
-			return line
-		}
-	}
-	return ""
-}
-
-// splitLines yields the lines of s without their terminators. The
-// final segment is yielded even if not newline-terminated.
-func splitLines(s string) func(yield func(string) bool) {
-	return func(yield func(string) bool) {
-		start := 0
-		for i := 0; i < len(s); i++ {
-			if s[i] == '\n' {
-				if !yield(s[start:i]) {
-					return
-				}
-				start = i + 1
-			}
-		}
-		if start <= len(s)-1 {
-			yield(s[start:])
-		}
-	}
 }
 
 // lineOpensConstruct reports whether line keeps a markdown

@@ -454,16 +454,33 @@ func (a *AssistantMessageItem) cachedError(width int) string {
 // lines so the visual box matches what the user sees today.
 func (a *AssistantMessageItem) renderThinking(thinking string, width int) string {
 	renderer := common.QuietMarkdownRenderer(a.sty, width)
-	rendered := a.streamingThinking.Render(thinking, width, renderer)
+
+	// Cap the raw text handed to glamour while the block is windowed.
+	// The collapsed and tail-window views only ever DISPLAY the last
+	// N rendered lines, so rendering the entire (unbounded) reasoning
+	// trace on every ~33ms streaming flush is wasted work that grows
+	// with the trace — O(n) per flush, O(n²) over the stream — and is
+	// the source of the "long thinking makes the UI lag" problem.
+	// Full expansion is an explicit request to see everything and is
+	// never bounded. droppedLines keeps the "N lines hidden" count
+	// roughly truthful and never affects what is displayed.
+	windowed, droppedLines := boundThinkingInput(thinking, a.thinkingViewMode, width)
+	rendered := a.streamingThinking.Render(windowed, width, renderer)
 	rendered = strings.TrimSpace(rendered)
 
 	lines := strings.Split(rendered, "\n")
-	totalLines := len(lines)
+	renderedLines := len(lines)
+	// totalLines counts everything the trace would render to, so the
+	// affordance's hidden-line count stays honest even though only
+	// the windowed tail was actually rendered.
+	totalLines := renderedLines + droppedLines
 
 	switch a.thinkingViewMode {
 	case thinkingCollapsed:
 		if totalLines > maxCollapsedThinkingHeight {
-			lines = lines[totalLines-maxCollapsedThinkingHeight:]
+			if renderedLines > maxCollapsedThinkingHeight {
+				lines = lines[renderedLines-maxCollapsedThinkingHeight:]
+			}
 			hint := a.sty.Messages.ThinkingTruncationHint.Render(
 				fmt.Sprintf(assistantMessageTruncateFormat, totalLines-maxCollapsedThinkingHeight),
 			)
@@ -471,7 +488,9 @@ func (a *AssistantMessageItem) renderThinking(thinking string, width int) string
 		}
 	case thinkingTailWindow:
 		if totalLines > maxExpandedThinkingTailLines {
-			lines = lines[totalLines-maxExpandedThinkingTailLines:]
+			if renderedLines > maxExpandedThinkingTailLines {
+				lines = lines[renderedLines-maxExpandedThinkingTailLines:]
+			}
 			hint := a.sty.Messages.ThinkingTruncationHint.Render(
 				fmt.Sprintf(assistantMessageTailWindowFormat, totalLines-maxExpandedThinkingTailLines),
 			)
@@ -498,6 +517,94 @@ func (a *AssistantMessageItem) renderThinking(thinking string, width int) string
 	}
 
 	return result
+}
+
+// boundThinkingInput caps the raw reasoning text fed to glamour so a
+// streaming flush costs O(window) instead of O(entire trace). It
+// returns the (possibly shortened) text to render plus the number of
+// source lines dropped ahead of the window.
+//
+// A full render is preserved for [thinkingFullExpanded] (the user
+// asked to see everything) and whenever the trace already fits the
+// budget, so short blocks and the non-streaming steady state behave
+// exactly as before.
+//
+// The window is snapped forward to a line boundary so a source line
+// is never cut mid-way, and a code fence left open by the cut is
+// re-opened at the window head so the tail keeps rendering as code
+// (matching reality) instead of flipping to prose. Any other
+// construct a raw cut might tear — a list, table, or blockquote at
+// the very top of the window — only corrupts lines that sit above
+// the displayed tail slice and are discarded before display.
+func boundThinkingInput(thinking string, mode thinkingViewMode, width int) (windowed string, droppedLines int) {
+	budget := thinkingWindowBytes(mode, width)
+	if budget <= 0 || len(thinking) <= budget {
+		return thinking, 0
+	}
+	// The streamingMarkdown incremental cache already keeps a flush
+	// cheap when a safe boundary sits within `budget` of the end: it
+	// re-renders only the small trailing segment. Windowing would
+	// break that fast path (a sliding window is never a prefix
+	// extension, forcing a cache reset every flush), so only window
+	// when the tail since the last boundary is itself larger than the
+	// budget — the "wall of text with no paragraph break" case the
+	// cache cannot handle.
+	if b := findSafeMarkdownBoundary(thinking); b >= 0 && len(thinking)-b <= budget {
+		return thinking, 0
+	}
+	cut := len(thinking) - budget
+	// Snap forward to the start of the next line so the window never
+	// begins in the middle of a source line.
+	if nl := strings.IndexByte(thinking[cut:], '\n'); nl >= 0 {
+		cut += nl + 1
+	}
+	dropped := thinking[:cut]
+	windowed = thinking[cut:]
+	// Re-open a code fence left dangling by the cut so the window's
+	// code renders as code rather than prose.
+	if fenceLineCount(dropped)%2 != 0 {
+		windowed = "```\n" + windowed
+	}
+	return windowed, strings.Count(dropped, "\n")
+}
+
+// thinkingWindowBytes returns the maximum bytes of raw reasoning text
+// to render for a view mode, or -1 for "no bound". The budget scales
+// with the wrap width so the window still comfortably overfills the
+// visible line cap after wrapping, with a floor for narrow widths.
+func thinkingWindowBytes(mode thinkingViewMode, width int) int {
+	if width < 1 {
+		width = 1
+	}
+	switch mode {
+	case thinkingCollapsed:
+		return max(4096, maxCollapsedThinkingHeight*width*8)
+	case thinkingTailWindow:
+		return max(32768, maxExpandedThinkingTailLines*width*4)
+	default:
+		return -1
+	}
+}
+
+// fenceLineCount counts fenced-code-block delimiter lines in s. An
+// odd count means a fence is still open at the end of s. Reuses the
+// same [isFenceLine] rule as the streaming-markdown boundary scanner.
+func fenceLineCount(s string) int {
+	n := 0
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\n' {
+			continue
+		}
+		if isFenceLine(s[start:i]) {
+			n++
+		}
+		start = i + 1
+	}
+	if start < len(s) && isFenceLine(s[start:]) {
+		n++
+	}
+	return n
 }
 
 // renderMarkdown renders content as markdown. F8 routes the call
