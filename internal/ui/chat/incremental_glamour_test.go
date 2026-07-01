@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -223,12 +224,46 @@ func TestFindSafeMarkdownBoundary_TableDriven(t *testing.T) {
 		{
 			name:    "closed list then paragraph",
 			content: "- one\n- two\n\nPara.",
-			// blank line after the list. Last non-blank line
-			// of prefix is "- two" — a list item — so the
-			// candidate is REJECTED. (Conservative: we don't
-			// know the list is "closed" without looking at
-			// what follows.)
-			want: -1,
+			// blank line after the list, then "Para." at
+			// indent 0 (< listBaseIndent+2). The closure-
+			// aware tracker sees the list close at "Para."
+			// and accepts the boundary at its start — the
+			// prefix contains a complete list.
+			want: len("- one\n- two\n\n"),
+		},
+		{
+			name:    "closed ordered list then paragraph",
+			content: "1. first\n2. second\n\nAfter list.",
+			// Same closure rule for ordered lists. Boundary at
+			// the start of "After list." — the list closed on
+			// the dedented non-marker line.
+			want: len("1. first\n2. second\n\n"),
+		},
+		{
+			name:    "list then multiple paragraphs",
+			content: "- item\n\nPara one.\n\nPara two.",
+			// The list closes at "Para one." and a boundary is
+			// accepted there. A later boundary at "Para two."
+			// should also be found (no list open anymore).
+			// Latest boundary wins.
+			want: len("- item\n\nPara one.\n\n"),
+		},
+		{
+			name:    "loose list continuation keeps list open",
+			content: "- item one\n\n  continuation\n\nPara after.",
+			// "  continuation" is indented 2 (>=
+			// listBaseIndent+2) so the list stays open
+			// through it. The list only closes at "Para
+			// after." Boundary at the start of "Para after.".
+			want: len("- item one\n\n  continuation\n\n"),
+		},
+		{
+			name:    "nested list then closure",
+			content: "- outer\n  - inner\n\nBack to top level.",
+			// Inner list opens at indent 2. "Back to top
+			// level." at indent 0 closes everything.
+			// Boundary at the start of "Back to top level.".
+			want: len("- outer\n  - inner\n\n"),
 		},
 		{
 			name:    "table at end",
@@ -638,9 +673,71 @@ func TestStreamingMarkdown_NoSafeBoundaryDoesNotCrash(t *testing.T) {
 	}
 }
 
-// -----------------------------------------------------------------------
-// Integration assertions on the wired-in path.
-// -----------------------------------------------------------------------
+// TestStreamingMarkdown_LongThinkingWithLists is the regression
+// test for the lag bug: a long thinking trace that contains a list
+// early on, followed by many paragraphs. Before the closure-aware
+// list tracker, the list marker forced findSafeMarkdownBoundary to
+// return -1 for the ENTIRE trace, so every streaming delta did a
+// full glamour re-render of the growing text — O(n²) overall and
+// visible lag on long reasoning.
+//
+// With the closure-aware tracker the list closes at the first
+// dedented paragraph, the stable-prefix cache advances past it,
+// and subsequent deltas only re-render the trailing partial. This
+// test asserts the cache actually advances (stablePrefix grows
+// beyond the list) and the final output is visually equivalent to
+// a fresh full render.
+func TestStreamingMarkdown_LongThinkingWithLists(t *testing.T) {
+	t.Parallel()
+
+	// Build a thinking trace: intro, a short list, then many
+	// paragraphs that simulate a long reasoning section.
+	var doc strings.Builder
+	doc.WriteString("Let me analyze this step by step.\n\n")
+	doc.WriteString("1. First consideration.\n\n")
+	doc.WriteString("2. Second consideration.\n\n")
+	doc.WriteString("3. Third consideration.\n\n")
+	for i := range 200 {
+		fmt.Fprintf(&doc, "Paragraph %d of the reasoning trace. It has enough text to be a real paragraph.\n\n", i)
+	}
+
+	full := doc.String()
+	listEnd := strings.Index(full, "3. Third consideration.\n\n") + len("3. Third consideration.\n\n")
+	require.Greater(t, listEnd, 0, "test setup: list end offset")
+
+	const width = 80
+	r := newTestRenderer(t, width)
+	var sm streamingMarkdown
+
+	// Stream the document in ~50 progressive prefixes. After the
+	// list closes, the cache should advance past listEnd.
+	steps := 50
+	prefixes := progressivePrefixes(full, steps)
+	var lastOut string
+	advanced := false
+	for i, p := range prefixes {
+		if p == "" {
+			continue
+		}
+		lastOut = sm.Render(p, width, r)
+		// Once the prefix extends well past the list, the
+		// stable prefix should have advanced past listEnd.
+		if len(p) > listEnd+200 && len(sm.stablePrefix) > listEnd {
+			advanced = true
+		}
+		_ = i
+	}
+	require.True(t, advanced,
+		"stable prefix must advance past the closed list — if it didn't, "+
+			"every delta is doing a full re-render (the lag bug)")
+
+	// Final output must be visually equivalent to a fresh render.
+	fresh := freshRender(t, full, width)
+	require.Equal(t, normalizeRender(fresh), normalizeRender(lastOut),
+		"final streaming output must match a fresh full render visually")
+}
+
+
 
 // -----------------------------------------------------------------------
 // T5 / T6 / T7: anywhere-in-prefix hazards (B1 / B2 / B3 from the
@@ -726,8 +823,11 @@ func runProgressiveBoundaryRespectTest(t *testing.T, doc string, hazardLineOffse
 // trailing paragraph creates a candidate boundary between the list
 // item and its continuation; the trailing non-blank line of that
 // candidate prefix is the continuation paragraph (not a list
-// marker), so the line-only check would accept it. The
-// anywhere-in-prefix list-marker check rejects it.
+// marker), so the line-only check would accept it. The closure-
+// aware list tracker keeps the list open through the continuation
+// (indent >= listBaseIndent+2) and only closes it at the dedented
+// "Trailing paragraph" line, so boundaries INSIDE the list are
+// rejected while the boundary at the closing line is accepted.
 func TestStreamingMarkdown_LooseListContinuation(t *testing.T) {
 	t.Parallel()
 
@@ -744,12 +844,42 @@ func TestStreamingMarkdown_LooseListContinuation(t *testing.T) {
 	}, "\n")
 
 	// The first list marker line begins after "Intro paragraph.\n\n".
-	// The cached stable prefix may include that boundary (BEFORE
-	// the list opens) but must never advance into the list.
-	hazardOffset := strings.Index(doc, "- item one")
-	require.Greater(t, hazardOffset, 0, "test setup")
+	// The closure boundary is the start of "Trailing paragraph after
+	// the list." — the first safe boundary after the list closes.
+	listStart := strings.Index(doc, "- item one")
+	require.Greater(t, listStart, 0, "test setup")
+	closureStart := strings.Index(doc, "Trailing paragraph")
+	require.Greater(t, closureStart, listStart, "test setup")
 
-	runProgressiveBoundaryRespectTest(t, doc, hazardOffset)
+	const width = 80
+	const steps = 25
+	renderer := newTestRenderer(t, width)
+	var sm streamingMarkdown
+
+	prefixes := progressivePrefixes(doc, steps)
+	var lastOut string
+	for i, p := range prefixes {
+		if p == "" {
+			continue
+		}
+		lastOut = sm.Render(p, width, renderer)
+		require.NotEmptyf(t, lastOut, "step %d: empty render", i)
+		// The stable prefix must NEVER be inside the list —
+		// either it's at/before the intro boundary (before the
+		// list opens) or at/after the closure boundary (after
+		// the list closes). A value strictly between listStart
+		// and closureStart would mean a boundary inside the
+		// list was accepted, which would split the loose list.
+		if len(sm.stablePrefix) > listStart && len(sm.stablePrefix) < closureStart {
+			t.Fatalf("step %d: cached stable prefix landed inside the loose list "+
+				"(len=%d, list starts at %d, closure at %d)\nsm.stablePrefix=%q",
+				i, len(sm.stablePrefix), listStart, closureStart, sm.stablePrefix)
+		}
+	}
+
+	fresh := freshRender(t, doc, width)
+	require.Equal(t, nonBlankLines(fresh), nonBlankLines(lastOut),
+		"final streaming output must contain the same non-blank lines as a fresh full render")
 }
 
 // TestStreamingMarkdown_HTMLBlock locks in the B2 fix. A raw HTML
