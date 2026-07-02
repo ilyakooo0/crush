@@ -275,6 +275,13 @@ type UI struct {
 	// sidebarLogo keeps a cached version of the sidebar sidebarLogo.
 	sidebarLogo string
 
+	// sidebar render cache: drawSidebar fully re-renders every frame, so we
+	// memoize the rendered block keyed by a fingerprint of every input that
+	// affects its output.
+	sidebarView     string
+	sidebarCacheKey uint64
+	hasSidebarCache bool
+
 	// Notification state
 	notifyBackend       notification.Backend
 	notifyWindowFocused bool
@@ -298,6 +305,10 @@ type UI struct {
 	focusedPillSection pillSection
 	promptQueue        int
 	pillsView          string
+	// pillsCacheKey fingerprints the inputs used to build pillsView so
+	// renderPills can skip re-rendering (and recomputing the queue
+	// gradient) when nothing that affects the output has changed.
+	pillsCacheKey string
 
 	// Todo spinner
 	todoSpinner    spinner.Model
@@ -3952,6 +3963,8 @@ func (m *UI) newSession() tea.Cmd {
 	m.pillsAutoExpanded = false
 	m.promptQueue = 0
 	m.pillsView = ""
+	m.pillsCacheKey = ""
+	m.hasSidebarCache = false
 	m.historyReset()
 	agenttools.ResetCache()
 	return tea.Batch(

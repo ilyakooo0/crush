@@ -245,8 +245,51 @@ func (m *UI) pillsAreaHeight() int {
 	return pillsAreaHeight
 }
 
+// pillsCacheState builds a fingerprint of every input that affects the
+// rendered pills. Returned alongside the width for reuse by renderPills.
+func (m *UI) pillsCacheState() string {
+	if !m.hasSession() {
+		return "no-session"
+	}
+	width := m.layout.pills.Dx()
+	hasQueue := m.promptQueue > 0
+
+	var kb strings.Builder
+	fmt.Fprintf(&kb, "w=%d;theme=%s;q=%d;exp=%t;sec=%d;",
+		width, m.themeKey, m.promptQueue, m.pillsExpanded, m.focusedPillSection)
+	// The in-progress spinner icon changes every animation frame, so fold
+	// its current view in only while spinning.
+	if m.todoIsSpinning {
+		kb.WriteString("spin=")
+		kb.WriteString(m.todoSpinner.View())
+		kb.WriteByte(';')
+	}
+	for i := range m.session.Todos {
+		td := &m.session.Todos[i]
+		fmt.Fprintf(&kb, "t%d=%v|%s|%s;", i, td.Status, td.Content, td.ActiveForm)
+	}
+	// The expanded queue list content only affects output when the queue
+	// section is expanded and focused.
+	if m.pillsExpanded && m.focusedPillSection == pillSectionQueue && hasQueue {
+		if m.com != nil && m.com.Workspace != nil && m.com.Workspace.AgentIsReady() {
+			for _, it := range m.com.Workspace.AgentQueuedPromptsList(m.session.ID) {
+				kb.WriteString(it)
+				kb.WriteByte(';')
+			}
+		}
+	}
+	return kb.String()
+}
+
 // renderPills renders the pills panel and stores it in m.pillsView.
 func (m *UI) renderPills() {
+	// Skip re-rendering when nothing that affects the output changed.
+	key := m.pillsCacheState()
+	if key == m.pillsCacheKey {
+		return
+	}
+	m.pillsCacheKey = key
+
 	m.pillsView = ""
 	if !m.hasSession() {
 		return

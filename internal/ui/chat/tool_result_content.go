@@ -20,19 +20,20 @@ func humanizedToolName(name string) string {
 	return stringext.Capitalize(name)
 }
 
+var markdownPatterns = []string{
+	"# ",
+	"## ",
+	"**",
+	"```",
+	"- ",
+	"1. ",
+	"> ",
+	"---",
+	"***",
+}
+
 func looksLikeMarkdown(content string) bool {
-	patterns := []string{
-		"# ",
-		"## ",
-		"**",
-		"```",
-		"- ",
-		"1. ",
-		"> ",
-		"---",
-		"***",
-	}
-	for _, p := range patterns {
+	for _, p := range markdownPatterns {
 		if strings.Contains(content, p) {
 			return true
 		}

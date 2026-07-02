@@ -379,10 +379,15 @@ func (t *baseToolMessageItem) Render(width int) string {
 		prefix = t.sty.Messages.ToolCallBlurred.Render()
 	}
 	lines := strings.Split(t.RawRender(width), "\n")
+	var sb strings.Builder
 	for i, ln := range lines {
-		lines[i] = prefix + ln
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(prefix)
+		sb.WriteString(ln)
 	}
-	out := strings.Join(lines, "\n")
+	out := sb.String()
 	if useCache {
 		t.setCachedPrefixedRender(out, width, key)
 	}
@@ -644,6 +649,7 @@ func toolOutputPlainContent(sty *styles.Styles, content string, width int, expan
 		maxLines = len(lines) // Show all
 	}
 
+	contentLineStyle := sty.Tool.ContentLine.Width(width)
 	var out []string
 	for i, ln := range lines {
 		if i >= maxLines {
@@ -653,7 +659,7 @@ func toolOutputPlainContent(sty *styles.Styles, content string, width int, expan
 		if lipgloss.Width(ln) > width {
 			ln = ansi.Truncate(ln, width, "…")
 		}
-		out = append(out, sty.Tool.ContentLine.Width(width).Render(ln))
+		out = append(out, contentLineStyle.Render(ln))
 	}
 
 	wasTruncated := len(lines) > responseContextHeight
@@ -695,16 +701,16 @@ func toolOutputCodeContent(sty *styles.Styles, path, content string, offset, wid
 	bodyWidth := width - toolBodyLeftPaddingTotal
 	codeWidth := bodyWidth - maxDigits
 
+	codeLineStyle := sty.Tool.ContentCodeLine.Width(codeWidth)
+	codeLinePadding := sty.Tool.ContentCodeLine.GetHorizontalPadding()
 	var out []string
 	for i, ln := range highlightedLines {
 		lineNum := sty.Tool.ContentLineNumber.Render(fmt.Sprintf(numFmt, i+1+offset))
 
 		// Truncate accounting for padding that will be added.
-		ln = ansi.Truncate(ln, codeWidth-sty.Tool.ContentCodeLine.GetHorizontalPadding(), "…")
+		ln = ansi.Truncate(ln, codeWidth-codeLinePadding, "…")
 
-		codeLine := sty.Tool.ContentCodeLine.
-			Width(codeWidth).
-			Render(ln)
+		codeLine := codeLineStyle.Render(ln)
 
 		out = append(out, lipgloss.JoinHorizontal(lipgloss.Left, lineNum, codeLine))
 	}

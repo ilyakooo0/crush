@@ -3,7 +3,9 @@ package model
 import (
 	"cmp"
 	"fmt"
+	"hash/fnv"
 	"image"
+	"sort"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/ui/common"
@@ -126,6 +128,80 @@ func getDynamicHeightLimits(availableHeight, fileCount, lspCount, mcpCount, skil
 	return maxFiles, maxLSPs, maxMCPs, maxSkills
 }
 
+// sidebarFingerprint computes a hash of every input that affects the
+// rendered sidebar, so drawSidebar can reuse a cached render when nothing
+// changed.
+func (m *UI) sidebarFingerprint(area uv.Rectangle) uint64 {
+	h := fnv.New64a()
+	fmt.Fprintf(h, "w=%d;h=%d;theme=%s;", area.Dx(), area.Dy(), m.themeKey)
+
+	if m.session != nil {
+		fmt.Fprintf(h, "sid=%s;title=%s;ct=%d;pt=%d;cost=%f;eu=%t;",
+			m.session.ID, m.session.Title,
+			m.session.CompletionTokens, m.session.PromptTokens,
+			m.session.Cost, m.session.EstimatedUsage)
+	}
+
+	fmt.Fprintf(h, "cwd=%s;hyper=%t;", m.com.Workspace.WorkingDir(), m.com.IsHyper())
+	if m.hyperCredits != nil {
+		fmt.Fprintf(h, "hc=%d;", *m.hyperCredits)
+	}
+	// The logo string is already cached; fold it in so any change to it (or
+	// the small-render breakpoint) invalidates the sidebar.
+	h.Write([]byte("logo="))
+	h.Write([]byte(m.sidebarLogo))
+	h.Write([]byte{';'})
+
+	if model := m.selectedLargeModel(); model != nil {
+		fmt.Fprintf(h, "model=%s|%s|reason=%t|lvls=%d|def=%s|think=%t|eff=%s|ctx=%d;",
+			model.ModelCfg.Provider, model.CatwalkCfg.Name,
+			model.CatwalkCfg.CanReason, len(model.CatwalkCfg.ReasoningLevels),
+			model.CatwalkCfg.DefaultReasoningEffort, model.ModelCfg.Think,
+			model.ModelCfg.ReasoningEffort, model.CatwalkCfg.ContextWindow)
+	} else {
+		h.Write([]byte("model=nil;"))
+	}
+
+	// Files.
+	for i := range m.sessionFiles {
+		f := &m.sessionFiles[i]
+		fmt.Fprintf(h, "f%d=%s|%d|%d|%d;", i,
+			f.LatestVersion.Path, f.Additions, f.Deletions, f.LatestVersion.UpdatedAt)
+	}
+
+	// LSPs (sorted by name for a stable fingerprint), with diagnostic counts.
+	lspNames := make([]string, 0, len(m.lspStates))
+	for name := range m.lspStates {
+		lspNames = append(lspNames, name)
+	}
+	sort.Strings(lspNames)
+	for _, name := range lspNames {
+		st := m.lspStates[name]
+		counts := m.com.Workspace.LSPGetDiagnosticCounts(name)
+		fmt.Fprintf(h, "l=%s|%v|err=%t|%d/%d/%d/%d;",
+			st.Name, st.State, st.Error != nil,
+			counts.Error, counts.Warning, counts.Hint, counts.Information)
+	}
+
+	// MCPs (config order, matching the render).
+	for _, mcpCfg := range m.com.Config().MCP.Sorted() {
+		state, ok := m.mcpStates[mcpCfg.Name]
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(h, "m=%s|%v|err=%t|%d/%d/%d;",
+			state.Name, state.State, state.Error != nil,
+			state.Counts.Tools, state.Counts.Prompts, state.Counts.Resources)
+	}
+
+	// Skills.
+	for _, it := range m.skillStatusItems() {
+		fmt.Fprintf(h, "s=%s|%s|%s;", it.icon, it.name, it.title)
+	}
+
+	return h.Sum64()
+}
+
 // sidebar renders the chat sidebar containing session title, working
 // directory, model info, file list, LSP status, and MCP status.
 func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
@@ -133,6 +209,18 @@ func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
 		return
 	}
 
+	key := m.sidebarFingerprint(area)
+	if !m.hasSidebarCache || key != m.sidebarCacheKey {
+		m.sidebarView = m.buildSidebar(area)
+		m.sidebarCacheKey = key
+		m.hasSidebarCache = true
+	}
+
+	uv.NewStyledString(m.sidebarView).Draw(scr, area)
+}
+
+// buildSidebar renders the sidebar content block as a string.
+func (m *UI) buildSidebar(area uv.Rectangle) string {
 	const logoHeightBreakpoint = 30
 
 	t := m.com.Styles
@@ -194,22 +282,20 @@ func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
 	skillsSection := m.skillsInfo(width, maxSkills, true)
 	filesSection := m.filesInfo(m.com.Workspace.WorkingDir(), width, maxFiles, true)
 
-	uv.NewStyledString(
-		lipgloss.NewStyle().
-			MaxWidth(width).
-			MaxHeight(height).
-			Render(
-				lipgloss.JoinVertical(
-					lipgloss.Left,
-					sidebarHeader,
-					filesSection,
-					"",
-					lspSection,
-					"",
-					mcpSection,
-					"",
-					skillsSection,
-				),
+	return lipgloss.NewStyle().
+		MaxWidth(width).
+		MaxHeight(height).
+		Render(
+			lipgloss.JoinVertical(
+				lipgloss.Left,
+				sidebarHeader,
+				filesSection,
+				"",
+				lspSection,
+				"",
+				mcpSection,
+				"",
+				skillsSection,
 			),
-	).Draw(scr, area)
+		)
 }

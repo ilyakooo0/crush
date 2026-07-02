@@ -253,16 +253,21 @@ func (a *AssistantMessageItem) Render(width int) string {
 	}
 	focused := a.sty.Messages.AssistantFocused.Render()
 	blurred := a.sty.Messages.AssistantBlurred.Render()
+	prefix := blurred
+	if a.focused {
+		prefix = focused
+	}
 	rendered := a.RawRender(width)
 	lines := strings.Split(rendered, "\n")
+	var sb strings.Builder
 	for i, line := range lines {
-		if a.focused {
-			lines[i] = focused + line
-		} else {
-			lines[i] = blurred + line
+		if i > 0 {
+			sb.WriteString("\n")
 		}
+		sb.WriteString(prefix)
+		sb.WriteString(line)
 	}
-	out := strings.Join(lines, "\n")
+	out := sb.String()
 	if useCache {
 		a.setCachedPrefixedRender(out, width, key)
 	}
