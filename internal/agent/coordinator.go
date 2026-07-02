@@ -1087,6 +1087,14 @@ func (c *coordinator) providerCacheKey(providerCfg config.ProviderConfig, model 
 	b.WriteByte(0)
 	b.WriteString(apiKey)
 	b.WriteByte(0)
+	// Bedrock falls back to AWS_BEARER_TOKEN_BEDROCK when no apiKey is
+	// configured, and that token is baked into the built client. Fold it
+	// into the key so a rotated token rebuilds the client instead of
+	// reusing a stale one.
+	if apiKey == "" && providerCfg.Type == bedrock.Name {
+		b.WriteString(os.Getenv("AWS_BEARER_TOKEN_BEDROCK"))
+	}
+	b.WriteByte(0)
 	b.WriteString(baseURL)
 	b.WriteByte(0)
 	for _, k := range slices.Sorted(maps.Keys(headers)) {

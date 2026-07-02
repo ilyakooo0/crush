@@ -461,7 +461,7 @@ func readBuiltinFile(params ViewParams, skillTracker *skills.Tracker) (fantasy.T
 	}
 
 	lines := strings.Split(content, "\n")
-	offset := min(params.Offset, len(lines))
+	offset := max(0, min(params.Offset, len(lines)))
 	lines = lines[offset:]
 
 	hasMore := len(lines) > limit

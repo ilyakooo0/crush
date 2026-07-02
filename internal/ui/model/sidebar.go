@@ -178,8 +178,11 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle) uint64 {
 	for _, name := range lspNames {
 		st := m.lspStates[name]
 		counts := m.com.Workspace.LSPGetDiagnosticCounts(name)
-		fmt.Fprintf(h, "l=%s|%v|err=%t|%d/%d/%d/%d;",
-			st.Name, st.State, st.Error != nil,
+		// Hash the error text, not just its presence: the render prints
+		// the message, so a changed message within the same state must
+		// invalidate the cache.
+		fmt.Fprintf(h, "l=%s|%v|err=%s|%d/%d/%d/%d;",
+			st.Name, st.State, errText(st.Error),
 			counts.Error, counts.Warning, counts.Hint, counts.Information)
 	}
 
@@ -189,8 +192,8 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle) uint64 {
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(h, "m=%s|%v|err=%t|%d/%d/%d;",
-			state.Name, state.State, state.Error != nil,
+		fmt.Fprintf(h, "m=%s|%v|err=%s|%d/%d/%d;",
+			state.Name, state.State, errText(state.Error),
 			state.Counts.Tools, state.Counts.Prompts, state.Counts.Resources)
 	}
 
@@ -200,6 +203,15 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle) uint64 {
 	}
 
 	return h.Sum64()
+}
+
+// errText returns err's message, or "" when nil. Used to fold error text
+// into cache fingerprints.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // sidebar renders the chat sidebar containing session title, working

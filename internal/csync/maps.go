@@ -75,15 +75,30 @@ func (m *Map[K, V]) Len() int {
 	return len(m.inner)
 }
 
-// GetOrSet gets and returns the key if it exists, otherwise, it executes the
-// given function, set its return value for the given key, and returns it.
+// GetOrSet gets and returns the value for key if it exists, otherwise it
+// executes fn, stores its return value for key, and returns it.
+//
+// The stored value and the returned value are always the same: if two
+// goroutines race on a missing key, exactly one fn result is stored and
+// every caller receives that stored value (the losers discard their own
+// fn result). This keeps singleton values (a mutex, a client, a cache
+// entry others mutate) consistent. fn may run more than once under
+// contention, so it must be side-effect-free and safe to call redundantly.
 func (m *Map[K, V]) GetOrSet(key K, fn func() V) V {
-	got, ok := m.Get(key)
-	if ok {
+	if got, ok := m.Get(key); ok {
 		return got
 	}
+	// Compute outside the lock so a slow fn (I/O, parsing) does not
+	// serialize other map users.
 	value := fn()
-	m.Set(key, value)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Re-check under the write lock: another goroutine may have won the
+	// race between our Get above and acquiring the lock.
+	if got, ok := m.inner[key]; ok {
+		return got
+	}
+	m.inner[key] = value
 	return value
 }
 

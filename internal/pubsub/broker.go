@@ -83,15 +83,18 @@ func (b *Broker[T]) SetMustDeliverTimeout(d time.Duration) {
 }
 
 func (b *Broker[T]) Shutdown() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Close b.done under the lock so concurrent Shutdown calls (and the
+	// per-subscriber goroutines, which also close under the lock) cannot
+	// double-close it and panic.
 	select {
 	case <-b.done: // Already closed
 		return
 	default:
 		close(b.done)
 	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
 
 	for ch := range b.subs {
 		delete(b.subs, ch)
@@ -118,11 +121,20 @@ func (b *Broker[T]) Subscribe(ctx context.Context) <-chan Event[T] {
 	b.subCount++
 
 	go func() {
-		<-ctx.Done()
+		// Wake on either the subscriber's context ending or the broker
+		// shutting down. Without the b.done case, a subscriber with a
+		// long-lived context would park here forever after Shutdown,
+		// leaking the goroutine.
+		select {
+		case <-ctx.Done():
+		case <-b.done:
+		}
 
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
+		// If the broker shut down, it already closed this channel under
+		// the lock; don't close it again.
 		select {
 		case <-b.done:
 			return
@@ -200,37 +212,57 @@ func (b *Broker[T]) Publish(t EventType, payload T) {
 // re-fetch on the next session-visible event).
 func (b *Broker[T]) PublishMustDeliver(ctx context.Context, t EventType, payload T) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-
 	select {
 	case <-b.done:
+		b.mu.RUnlock()
 		return
 	default:
 	}
-
 	event := Event[T]{Type: t, Payload: payload}
 	timeout := b.mustDeliverTimeout
-
+	// Snapshot the subscribers so the bounded-blocking sends below run
+	// without holding b.mu. Holding the read lock across a blocking send
+	// would stall Subscribe/Shutdown for up to N×timeout under saturation.
+	subs := make([]chan Event[T], 0, len(b.subs))
 	for sub := range b.subs {
-		// Fast path: non-blocking send.
-		select {
-		case sub <- event:
-			continue
-		default:
-		}
+		subs = append(subs, sub)
+	}
+	b.mu.RUnlock()
 
-		// Slow path: bounded blocking send.
-		timer := time.NewTimer(timeout)
-		select {
-		case sub <- event:
-			timer.Stop()
-		case <-timer.C:
-			b.mustDeliverDropCount.Add(1)
-			slog.Error("PublishMustDeliver timed out delivering event",
-				"type", t, "timeout", timeout)
-		case <-ctx.Done():
-			timer.Stop()
+	for _, sub := range subs {
+		if b.mustDeliver(ctx, sub, event, timeout) {
+			// Context cancelled; stop delivering to the remaining subs.
 			return
 		}
 	}
+}
+
+// mustDeliver performs one bounded-blocking send. It reports whether the
+// context was cancelled (so the caller stops delivering to remaining
+// subscribers). Because sends happen without holding b.mu, the channel may
+// be closed concurrently by Shutdown or an unsubscribe; sending on a closed
+// channel panics, so we recover and treat that subscriber as gone.
+func (b *Broker[T]) mustDeliver(ctx context.Context, sub chan Event[T], event Event[T], timeout time.Duration) (ctxDone bool) {
+	defer func() { _ = recover() }()
+
+	// Fast path: non-blocking send.
+	select {
+	case sub <- event:
+		return false
+	default:
+	}
+
+	// Slow path: bounded blocking send.
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case sub <- event:
+	case <-timer.C:
+		b.mustDeliverDropCount.Add(1)
+		slog.Error("PublishMustDeliver timed out delivering event",
+			"type", event.Type, "timeout", timeout)
+	case <-ctx.Done():
+		return true
+	}
+	return false
 }
