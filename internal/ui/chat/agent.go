@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -22,6 +23,18 @@ type NestedToolContainer interface {
 	NestedTools() []ToolMessageItem
 	SetNestedTools(tools []ToolMessageItem)
 	AddNestedTool(tool ToolMessageItem)
+}
+
+// collapsedNestedHint is the affordance shown under a collapsed sub-agent
+// card, indicating its nested tool calls can be revealed with space.
+const collapsedNestedHint = "  ▸ space to expand"
+
+// toolCountLabel renders a "N tools" summary for a sub-agent header line.
+func toolCountLabel(n int) string {
+	if n == 1 {
+		return "1 tool"
+	}
+	return fmt.Sprintf("%d tools", n)
 }
 
 // AgentToolMessageItem is a message item that represents an agent tool call.
@@ -139,6 +152,10 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	}
 
 	header := toolHeader(sty, opts.Status, "Agent", cappedWidth, opts)
+	nestedCount := len(r.agent.nestedTools)
+	if nestedCount > 0 {
+		header += "  " + sty.Tool.ParamMain.Render(toolCountLabel(nestedCount))
+	}
 	if opts.Compact {
 		return header
 	}
@@ -164,17 +181,22 @@ func (r *AgentToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 		),
 	)
 
-	// Build tree with nested tool calls.
-	childTools := tree.Root(header)
-
-	for _, nestedTool := range r.agent.nestedTools {
-		childView := nestedTool.Render(remainingWidth)
-		childTools.Child(childView)
-	}
-
-	// Build parts.
+	// Nested tool calls are collapsed by default to keep the conversation
+	// readable; press space to expand the full call tree.
 	var parts []string
-	parts = append(parts, childTools.Enumerator(roundedEnumerator(2, taskTagWidth-5)).String())
+	if opts.ExpandedContent {
+		childTools := tree.Root(header)
+		for _, nestedTool := range r.agent.nestedTools {
+			childView := nestedTool.Render(remainingWidth)
+			childTools.Child(childView)
+		}
+		parts = append(parts, childTools.Enumerator(roundedEnumerator(2, taskTagWidth-5)).String())
+	} else {
+		parts = append(parts, header)
+		if nestedCount > 0 {
+			parts = append(parts, sty.Tool.AgentPrompt.Render(collapsedNestedHint))
+		}
+	}
 
 	// Show animation if still running.
 	if !opts.HasResult() && !opts.IsCanceled() {
@@ -308,6 +330,10 @@ func (r *AgenticFetchToolRenderContext) RenderTool(sty *styles.Styles, width int
 	}
 
 	header := toolHeader(sty, opts.Status, "Agentic Fetch", cappedWidth, opts, toolParams...)
+	nestedCount := len(r.fetch.nestedTools)
+	if nestedCount > 0 {
+		header += "  " + sty.Tool.ParamMain.Render(toolCountLabel(nestedCount))
+	}
 	if opts.Compact {
 		return header
 	}
@@ -333,17 +359,22 @@ func (r *AgenticFetchToolRenderContext) RenderTool(sty *styles.Styles, width int
 		),
 	)
 
-	// Build tree with nested tool calls.
-	childTools := tree.Root(header)
-
-	for _, nestedTool := range r.fetch.nestedTools {
-		childView := nestedTool.Render(remainingWidth)
-		childTools.Child(childView)
-	}
-
-	// Build parts.
+	// Nested tool calls are collapsed by default to keep the conversation
+	// readable; press space to expand the full call tree.
 	var parts []string
-	parts = append(parts, childTools.Enumerator(roundedEnumerator(2, promptTagWidth-5)).String())
+	if opts.ExpandedContent {
+		childTools := tree.Root(header)
+		for _, nestedTool := range r.fetch.nestedTools {
+			childView := nestedTool.Render(remainingWidth)
+			childTools.Child(childView)
+		}
+		parts = append(parts, childTools.Enumerator(roundedEnumerator(2, promptTagWidth-5)).String())
+	} else {
+		parts = append(parts, header)
+		if nestedCount > 0 {
+			parts = append(parts, sty.Tool.AgentPrompt.Render(collapsedNestedHint))
+		}
+	}
 
 	// Show animation if still running.
 	if !opts.HasResult() && !opts.IsCanceled() {
