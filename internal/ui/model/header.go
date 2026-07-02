@@ -2,6 +2,8 @@ package model
 
 import (
 	"fmt"
+	"hash/fnv"
+	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -36,9 +38,12 @@ type header struct {
 	// lipgloss.Render calls, PrettyPath+DirTrim, ansi.Truncate) every
 	// frame; memoize the rendered string keyed by a cheap fingerprint of
 	// everything it depends on.
-	compactCacheKey  string
+	compactCacheKey  uint64
 	compactCacheView string
 	hasCompactCache  bool
+	// compactFPBuf is a scratch buffer reused across frames to build the
+	// compact-header fingerprint without allocating (see compactFingerprint).
+	compactFPBuf []byte
 }
 
 // newHeader creates a new header model.
@@ -119,7 +124,7 @@ func (h *header) compactFingerprint(
 	width int,
 	hyperCredits *int,
 	lspErrorCount int,
-) string {
+) uint64 {
 	var contextWindow int64
 	agentCfg := h.com.Config().Agents[config.AgentCoder]
 	if model := h.com.Config().GetModelByType(agentCfg.Model); model != nil {
@@ -130,11 +135,34 @@ func (h *header) compactFingerprint(
 	if hasCredits {
 		credits = *hyperCredits
 	}
-	return fmt.Sprintf("w=%d;sid=%s;ct=%d;pt=%d;eu=%t;lsp=%d;det=%t;hyper=%t;hc=%t/%d;cw=%d;cwd=%s",
-		width, session.ID,
-		session.CompletionTokens, session.PromptTokens, session.EstimatedUsage,
-		lspErrorCount, detailsOpen, h.com.IsHyper(), hasCredits, credits,
-		contextWindow, h.com.Workspace.WorkingDir())
+	// Build into a reused buffer with strconv appends and hash once, rather
+	// than fmt.Sprintf: this runs every frame in compact mode, so the arg
+	// boxing and result-string allocation Sprintf performed were pure churn.
+	b := h.compactFPBuf[:0]
+	putInt := func(k string, v int64) { b = append(b, k...); b = strconv.AppendInt(b, v, 10) }
+	putInt("w=", int64(width))
+	b = append(b, ";sid="...)
+	b = append(b, session.ID...)
+	putInt(";ct=", session.CompletionTokens)
+	putInt(";pt=", session.PromptTokens)
+	b = append(b, ";eu="...)
+	b = strconv.AppendBool(b, session.EstimatedUsage)
+	putInt(";lsp=", int64(lspErrorCount))
+	b = append(b, ";det="...)
+	b = strconv.AppendBool(b, detailsOpen)
+	b = append(b, ";hyper="...)
+	b = strconv.AppendBool(b, h.com.IsHyper())
+	b = append(b, ";hc="...)
+	b = strconv.AppendBool(b, hasCredits)
+	putInt("/", int64(credits))
+	putInt(";cw=", contextWindow)
+	b = append(b, ";cwd="...)
+	b = append(b, h.com.Workspace.WorkingDir()...)
+	h.compactFPBuf = b // retain the grown buffer for reuse next frame
+
+	hash := fnv.New64a()
+	hash.Write(b)
+	return hash.Sum64()
 }
 
 // buildCompactHeader renders the compact header string.

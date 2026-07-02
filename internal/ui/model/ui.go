@@ -301,6 +301,9 @@ type UI struct {
 	sidebarView     string
 	sidebarCacheKey uint64
 	hasSidebarCache bool
+	// sidebarFPBuf is a scratch buffer reused across frames to build the
+	// sidebar fingerprint without allocating (see sidebarFingerprint).
+	sidebarFPBuf []byte
 
 	// selectedLargeModel cache: resolving the selected large model hits
 	// the agent coordinator, which is an RPC (AgentIsReady + AgentModel)

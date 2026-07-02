@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"image"
 	"sort"
+	"strconv"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/config"
@@ -134,41 +135,67 @@ func getDynamicHeightLimits(availableHeight, fileCount, lspCount, mcpCount, skil
 // changed. skillItems and mcpSorted are computed once per render by
 // drawSidebar and reused by buildSidebar to avoid recomputing them.
 func (m *UI) sidebarFingerprint(area uv.Rectangle, skillItems []skillStatusItem, mcpSorted []config.MCP) uint64 {
-	h := fnv.New64a()
-	fmt.Fprintf(h, "w=%d;h=%d;theme=%s;", area.Dx(), area.Dy(), m.themeKey)
+	// Build the fingerprint into a reused scratch buffer using strconv
+	// appends instead of fmt.Fprintf. This runs on every frame (before the
+	// sidebar render cache is consulted), so the reflection-based arg boxing
+	// fmt.Fprintf performs was pure per-frame allocation churn. Appending to
+	// a retained buffer and hashing it once is allocation-free after warmup.
+	b := m.sidebarFPBuf[:0]
+	putInt := func(k string, v int64) { b = append(b, k...); b = strconv.AppendInt(b, v, 10) }
+	putStr := func(k, v string) { b = append(b, k...); b = append(b, v...) }
+	putBool := func(k string, v bool) { b = append(b, k...); b = strconv.AppendBool(b, v) }
+
+	putInt("w=", int64(area.Dx()))
+	putInt(";h=", int64(area.Dy()))
+	putStr(";theme=", m.themeKey)
+	b = append(b, ';')
 
 	if m.session != nil {
-		fmt.Fprintf(h, "sid=%s;title=%s;ct=%d;pt=%d;cost=%f;eu=%t;",
-			m.session.ID, m.session.Title,
-			m.session.CompletionTokens, m.session.PromptTokens,
-			m.session.Cost, m.session.EstimatedUsage)
+		putStr("sid=", m.session.ID)
+		putStr(";title=", m.session.Title)
+		putInt(";ct=", m.session.CompletionTokens)
+		putInt(";pt=", m.session.PromptTokens)
+		b = append(b, ";cost="...)
+		b = strconv.AppendFloat(b, m.session.Cost, 'f', -1, 64)
+		putBool(";eu=", m.session.EstimatedUsage)
+		b = append(b, ';')
 	}
 
-	fmt.Fprintf(h, "cwd=%s;hyper=%t;", m.com.Workspace.WorkingDir(), m.com.IsHyper())
+	putStr("cwd=", m.com.Workspace.WorkingDir())
+	putBool(";hyper=", m.com.IsHyper())
+	b = append(b, ';')
 	if m.hyperCredits != nil {
-		fmt.Fprintf(h, "hc=%d;", *m.hyperCredits)
+		putInt("hc=", int64(*m.hyperCredits))
+		b = append(b, ';')
 	}
 	// The logo string is already cached; fold it in so any change to it (or
 	// the small-render breakpoint) invalidates the sidebar.
-	h.Write([]byte("logo="))
-	h.Write([]byte(m.sidebarLogo))
-	h.Write([]byte{';'})
+	putStr("logo=", m.sidebarLogo)
+	b = append(b, ';')
 
 	if model := m.selectedLargeModel(); model != nil {
-		fmt.Fprintf(h, "model=%s|%s|reason=%t|lvls=%d|def=%s|think=%t|eff=%s|ctx=%d;",
-			model.ModelCfg.Provider, model.CatwalkCfg.Name,
-			model.CatwalkCfg.CanReason, len(model.CatwalkCfg.ReasoningLevels),
-			model.CatwalkCfg.DefaultReasoningEffort, model.ModelCfg.Think,
-			model.ModelCfg.ReasoningEffort, model.CatwalkCfg.ContextWindow)
+		putStr("model=", model.ModelCfg.Provider)
+		putStr("|", model.CatwalkCfg.Name)
+		putBool("|reason=", model.CatwalkCfg.CanReason)
+		putInt("|lvls=", int64(len(model.CatwalkCfg.ReasoningLevels)))
+		putStr("|def=", model.CatwalkCfg.DefaultReasoningEffort)
+		putBool("|think=", model.ModelCfg.Think)
+		putStr("|eff=", model.ModelCfg.ReasoningEffort)
+		putInt("|ctx=", int64(model.CatwalkCfg.ContextWindow))
+		b = append(b, ';')
 	} else {
-		h.Write([]byte("model=nil;"))
+		b = append(b, "model=nil;"...)
 	}
 
 	// Files.
 	for i := range m.sessionFiles {
 		f := &m.sessionFiles[i]
-		fmt.Fprintf(h, "f%d=%s|%d|%d|%d;", i,
-			f.LatestVersion.Path, f.Additions, f.Deletions, f.LatestVersion.UpdatedAt)
+		putInt("f", int64(i))
+		putStr("=", f.LatestVersion.Path)
+		putInt("|", int64(f.Additions))
+		putInt("|", int64(f.Deletions))
+		putInt("|", f.LatestVersion.UpdatedAt)
+		b = append(b, ';')
 	}
 
 	// LSPs (sorted by name for a stable fingerprint), with diagnostic counts.
@@ -188,9 +215,14 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle, skillItems []skillStatusItem,
 		// Hash the error text, not just its presence: the render prints
 		// the message, so a changed message within the same state must
 		// invalidate the cache.
-		fmt.Fprintf(h, "l=%s|%v|err=%s|%d/%d/%d/%d;",
-			st.Name, st.State, errText(st.Error),
-			counts.Error, counts.Warning, counts.Hint, counts.Information)
+		putStr("l=", st.Name)
+		putInt("|", int64(st.State))
+		putStr("|err=", errText(st.Error))
+		putInt("|", int64(counts.Error))
+		putInt("/", int64(counts.Warning))
+		putInt("/", int64(counts.Hint))
+		putInt("/", int64(counts.Information))
+		b = append(b, ';')
 	}
 
 	// MCPs (config order, matching the render).
@@ -199,16 +231,26 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle, skillItems []skillStatusItem,
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(h, "m=%s|%v|err=%s|%d/%d/%d;",
-			state.Name, state.State, errText(state.Error),
-			state.Counts.Tools, state.Counts.Prompts, state.Counts.Resources)
+		putStr("m=", state.Name)
+		putInt("|", int64(state.State))
+		putStr("|err=", errText(state.Error))
+		putInt("|", int64(state.Counts.Tools))
+		putInt("/", int64(state.Counts.Prompts))
+		putInt("/", int64(state.Counts.Resources))
+		b = append(b, ';')
 	}
 
 	// Skills.
 	for _, it := range skillItems {
-		fmt.Fprintf(h, "s=%s|%s|%s;", it.icon, it.name, it.title)
+		putStr("s=", it.icon)
+		putStr("|", it.name)
+		putStr("|", it.title)
+		b = append(b, ';')
 	}
 
+	m.sidebarFPBuf = b // retain the grown buffer for reuse next frame
+	h := fnv.New64a()
+	h.Write(b)
 	return h.Sum64()
 }
 
