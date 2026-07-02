@@ -157,6 +157,7 @@ type sessionAgent struct {
 	systemPromptPrefix *csync.Value[string]
 	systemPrompt       *csync.Value[string]
 	tools              *csync.Slice[fantasy.AgentTool]
+	toolsGen           atomic.Uint64 // bumped by SetTools; lets PrepareStep skip re-copying unchanged tools
 
 	isSubAgent           bool
 	sessions             session.Service
@@ -642,6 +643,13 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	// Copy mutable fields under lock to avoid races with SetTools/SetModels.
 	agentTools := a.tools.Copy()
+	// Per-step tool snapshot reused across PrepareStep calls; only
+	// re-copied when SetTools bumps toolsGen (see PrepareStep below).
+	var (
+		stepTools     []fantasy.AgentTool
+		stepToolsGen  uint64
+		stepToolsInit bool
+	)
 	largeModel := a.largeModel.Get()
 	systemPrompt := a.systemPrompt.Get()
 	promptPrefix := a.systemPromptPrefix.Get()
@@ -806,7 +814,14 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			}
 
 			// Use latest tools (updated by SetTools when MCP tools change).
-			prepared.Tools = a.tools.Copy()
+			// Reuse the previous step's copy unless SetTools has bumped the
+			// generation, so an unchanged tool set isn't re-copied every step.
+			if gen := a.toolsGen.Load(); !stepToolsInit || gen != stepToolsGen {
+				stepTools = a.tools.Copy()
+				stepToolsGen = gen
+				stepToolsInit = true
+			}
+			prepared.Tools = stepTools
 
 			// Drain queued follow-up prompts for this step. Calls covered
 			// by a cancel recorded while they sat in the queue are dropped:
@@ -1975,14 +1990,10 @@ func (a *sessionAgent) CancelAll() {
 }
 
 func (a *sessionAgent) IsBusy() bool {
-	var busy bool
-	for cancelFunc := range a.activeRequests.Seq() {
-		if cancelFunc != nil {
-			busy = true
-			break
-		}
-	}
-	return busy
+	// activeRequests only ever holds non-nil cancel funcs (Set with a
+	// real func, removed via Del), so a length check is exact — and it
+	// avoids cloning the whole map, which Seq() does on every call.
+	return a.activeRequests.Len() > 0
 }
 
 func (a *sessionAgent) IsSessionBusy(sessionID string) bool {
@@ -2017,6 +2028,7 @@ func (a *sessionAgent) SetModels(large Model, small Model) {
 
 func (a *sessionAgent) SetTools(tools []fantasy.AgentTool) {
 	a.tools.SetSlice(tools)
+	a.toolsGen.Add(1)
 }
 
 func (a *sessionAgent) SetSystemPrompt(systemPrompt string) {

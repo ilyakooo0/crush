@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/discover"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
@@ -123,6 +124,14 @@ type coordinator struct {
 	activeSkills []*skills.Skill // Post-filter: active skills only.
 	skillTracker *skills.Tracker
 
+	// providerClients caches built provider clients keyed by their fully
+	// resolved configuration. UpdateModels rebuilds models every turn;
+	// without this, each turn discards the provider's HTTP client and its
+	// keep-alive connection pool, forcing a fresh TLS handshake. The key
+	// captures every input buildProvider depends on, so any config/model/
+	// credential change misses the cache and rebuilds.
+	providerClients *csync.Map[string, fantasy.Provider]
+
 	readyWg errgroup.Group
 }
 
@@ -166,6 +175,8 @@ func NewCoordinator(
 		allSkills:    allSkills,
 		activeSkills: activeSkills,
 		skillTracker: skillTracker,
+
+		providerClients: csync.NewMap[string, fantasy.Provider](),
 	}
 
 	agentCfg, ok := cfg.Config().Agents[config.AgentCoder]
@@ -1043,6 +1054,66 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 	apiKey, _ := c.cfg.Resolve(providerCfg.APIKey)
 	baseURL, _ := c.cfg.Resolve(providerCfg.BaseURL)
 
+	// Reuse a previously built client when nothing that affects it has
+	// changed, so the HTTP keep-alive pool survives across turns. The key
+	// is derived from the resolved inputs above (plus the debug flag); the
+	// per-provider adjustments inside the switch below are deterministic
+	// functions of these, so identical inputs always yield an identical
+	// client.
+	cacheKey := c.providerCacheKey(providerCfg, model, apiKey, baseURL, headers, isSubAgent)
+	if p, ok := c.providerClients.Get(cacheKey); ok {
+		return p, nil
+	}
+	provider, err := c.buildProviderUncached(providerCfg, model, apiKey, baseURL, headers, isSubAgent)
+	if err != nil {
+		return nil, err
+	}
+	c.providerClients.Set(cacheKey, provider)
+	return provider, nil
+}
+
+// providerCacheKey builds a stable key from every input buildProvider's
+// switch consumes, so any credential, endpoint, header, or option change
+// produces a distinct key (and thus a rebuilt client).
+func (c *coordinator) providerCacheKey(providerCfg config.ProviderConfig, model config.SelectedModel, apiKey, baseURL string, headers map[string]string, isSubAgent bool) string {
+	var b strings.Builder
+	b.WriteString(providerCfg.ID)
+	b.WriteByte(0)
+	b.WriteString(string(providerCfg.Type))
+	b.WriteByte(0)
+	// The opencode providers pick their client type from the model, so the
+	// model must participate in the key.
+	b.WriteString(model.Model)
+	b.WriteByte(0)
+	b.WriteString(apiKey)
+	b.WriteByte(0)
+	b.WriteString(baseURL)
+	b.WriteByte(0)
+	for _, k := range slices.Sorted(maps.Keys(headers)) {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(headers[k])
+		b.WriteByte(1)
+	}
+	b.WriteByte(0)
+	if extra, err := json.Marshal(providerCfg.ExtraBody); err == nil {
+		b.Write(extra)
+	}
+	b.WriteByte(0)
+	if extra, err := json.Marshal(providerCfg.ExtraParams); err == nil {
+		b.Write(extra)
+	}
+	b.WriteByte(0)
+	if isSubAgent {
+		b.WriteByte('s')
+	}
+	if c.cfg.Config().Options.Debug {
+		b.WriteByte('d')
+	}
+	return b.String()
+}
+
+func (c *coordinator) buildProviderUncached(providerCfg config.ProviderConfig, model config.SelectedModel, apiKey, baseURL string, headers map[string]string, isSubAgent bool) (fantasy.Provider, error) {
 	switch providerCfg.ID {
 	case string(catwalk.InferenceProviderOpenCodeGo), string(catwalk.InferenceProviderOpenCodeZen):
 		if opencodeMessagesModels[model.Model] {
