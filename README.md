@@ -1,5 +1,8 @@
 # Crush
 
+> [!NOTE]
+> This is a personal fork of [charmbracelet/crush](https://github.com/charmbracelet/crush) with UI/UX tweaks and performance improvements.
+
 <p align="center">
     <a href="https://stuff.charm.sh/crush/charm-crush.png"><img width="450" alt="Charm Crush Logo" src="https://github.com/user-attachments/assets/cf8ca3ce-8b02-43f0-9d0f-5a331488da4b" /></a><br />
     <a href="https://github.com/charmbracelet/crush/releases"><img src="https://img.shields.io/github/release/charmbracelet/crush" alt="Latest Release"></a>
