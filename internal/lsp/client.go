@@ -53,6 +53,11 @@ type Client struct {
 	// Diagnostic cache
 	diagnostics *csync.VersionedMap[protocol.DocumentURI, []protocol.Diagnostic]
 
+	// diagnosticsTotal is a running total of diagnostics across all files,
+	// maintained incrementally as diagnostics are set to avoid recounting
+	// every file on each publishDiagnostics notification.
+	diagnosticsTotal atomic.Int64
+
 	// Cached diagnostic counts to avoid map copy on every UI render.
 	diagCountsCache   DiagnosticCounts
 	diagCountsVersion uint64

@@ -34,6 +34,26 @@ var (
 	latestStatesMu sync.RWMutex
 )
 
+// ignoredWalkDirs is a set of directory names that skill discovery never
+// descends into. Pruning these avoids walking large dependency/VCS trees that
+// cannot contain user skills.
+var ignoredWalkDirs = map[string]bool{
+	"node_modules": true,
+	".git":         true,
+	".svn":         true,
+	".hg":          true,
+	"vendor":       true,
+	"dist":         true,
+	"build":        true,
+	"target":       true,
+	".idea":        true,
+	".vscode":      true,
+	"__pycache__":  true,
+	".cache":       true,
+	"bin":          true,
+	"obj":          true,
+}
+
 // Skill represents a parsed SKILL.md file.
 type Skill struct {
 	Name                   string            `yaml:"name" json:"name"`
@@ -249,7 +269,16 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 				addState("", path, StateError, err)
 				return nil
 			}
-			if d.IsDir() || d.Name() != SkillFileName {
+			if d.IsDir() {
+				// Prune large/irrelevant directory trees so discovery does
+				// not descend into dependency and VCS directories. Never
+				// prune the walk root itself.
+				if path != base && ignoredWalkDirs[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.Name() != SkillFileName {
 				return nil
 			}
 			mu.Lock()

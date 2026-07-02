@@ -22,32 +22,34 @@ type FileInfo struct {
 	ModTime time.Time
 }
 
+// commonIgnoredDirs is a set of directory names that SkipHidden always ignores.
+// Hoisted to package scope so it is built once instead of on every call.
+var commonIgnoredDirs = map[string]bool{
+	".crush":           true,
+	"node_modules":     true,
+	"vendor":           true,
+	"dist":             true,
+	"build":            true,
+	"target":           true,
+	".git":             true,
+	".idea":            true,
+	".vscode":          true,
+	"__pycache__":      true,
+	"bin":              true,
+	"obj":              true,
+	"out":              true,
+	"coverage":         true,
+	"logs":             true,
+	"generated":        true,
+	"bower_components": true,
+	"jspm_packages":    true,
+}
+
 func SkipHidden(path string) bool {
 	// Check for hidden files (starting with a dot)
 	base := filepath.Base(path)
 	if base != "." && strings.HasPrefix(base, ".") {
 		return true
-	}
-
-	commonIgnoredDirs := map[string]bool{
-		".crush":           true,
-		"node_modules":     true,
-		"vendor":           true,
-		"dist":             true,
-		"build":            true,
-		"target":           true,
-		".git":             true,
-		".idea":            true,
-		".vscode":          true,
-		"__pycache__":      true,
-		"bin":              true,
-		"obj":              true,
-		"out":              true,
-		"coverage":         true,
-		"logs":             true,
-		"generated":        true,
-		"bower_components": true,
-		"jspm_packages":    true,
 	}
 
 	parts := strings.SplitSeq(path, string(os.PathSeparator))

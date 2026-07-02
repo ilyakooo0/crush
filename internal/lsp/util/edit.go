@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -37,28 +38,40 @@ func applyTextEdits(uri protocol.DocumentURI, edits []protocol.TextEdit, encodin
 	// Split into lines without the endings
 	lines := strings.Split(string(content), lineEnding)
 
-	// Check for overlapping edits
-	for i, edit1 := range edits {
-		for j := i + 1; j < len(edits); j++ {
-			if rangesOverlap(edit1.Range, edits[j].Range) {
-				return fmt.Errorf("overlapping edits detected between edit %d and %d", i, j)
-			}
-		}
-	}
-
-	// Sort edits in reverse order
+	// Sort edits once by ascending start position (end position as a stable
+	// tiebreaker). This lets us both detect overlaps in a single linear pass
+	// and apply edits from the bottom of the file upward.
 	sortedEdits := make([]protocol.TextEdit, len(edits))
 	copy(sortedEdits, edits)
 	sort.Slice(sortedEdits, func(i, j int) bool {
-		if sortedEdits[i].Range.Start.Line != sortedEdits[j].Range.Start.Line {
-			return sortedEdits[i].Range.Start.Line > sortedEdits[j].Range.Start.Line
+		a, b := sortedEdits[i].Range, sortedEdits[j].Range
+		if a.Start.Line != b.Start.Line {
+			return a.Start.Line < b.Start.Line
 		}
-		return sortedEdits[i].Range.Start.Character > sortedEdits[j].Range.Start.Character
+		if a.Start.Character != b.Start.Character {
+			return a.Start.Character < b.Start.Character
+		}
+		if a.End.Line != b.End.Line {
+			return a.End.Line < b.End.Line
+		}
+		return a.End.Character < b.End.Character
 	})
 
-	// Apply each edit
-	for _, edit := range sortedEdits {
-		newLines, err := applyTextEdit(lines, edit, encoding)
+	// Detect overlapping edits in a single linear pass. Because the edits are
+	// sorted by ascending start, any overlap manifests between two adjacent
+	// edits, so checking neighbors is sufficient.
+	for i := 1; i < len(sortedEdits); i++ {
+		if rangesOverlap(sortedEdits[i-1].Range, sortedEdits[i].Range) {
+			return fmt.Errorf("overlapping edits detected between edit %d and %d", i-1, i)
+		}
+	}
+
+	// Apply edits from the bottom of the file upward so that earlier edits'
+	// line/character offsets are not shifted by later ones. applyTextEdit
+	// splices the affected range in place instead of rebuilding the whole
+	// slice per edit.
+	for i := len(sortedEdits) - 1; i >= 0; i-- {
+		newLines, err := applyTextEdit(lines, sortedEdits[i], encoding)
 		if err != nil {
 			return fmt.Errorf("failed to apply edit: %w", err)
 		}
@@ -118,12 +131,6 @@ func applyTextEdit(lines []string, edit protocol.TextEdit, encoding powernap.Off
 		endChar = utf32ToByteOffset(endLineContent, edit.Range.End.Character)
 	}
 
-	// Create result slice with initial capacity
-	result := make([]string, 0, len(lines))
-
-	// Copy lines before edit
-	result = append(result, lines[:startLine]...)
-
 	// Get the prefix of the start line
 	startLineContent := lines[startLine]
 	if startChar < 0 || startChar > len(startLineContent) {
@@ -138,10 +145,11 @@ func applyTextEdit(lines []string, edit protocol.TextEdit, encoding powernap.Off
 	}
 	suffix := endLineContent[endChar:]
 
-	// Handle the edit
+	// Build the replacement lines for the edited range [startLine, endLine].
+	var region []string
 	if edit.NewText == "" {
 		if prefix+suffix != "" {
-			result = append(result, prefix+suffix)
+			region = []string{prefix + suffix}
 		}
 	} else {
 		// Split new text into lines, being careful not to add extra newlines
@@ -150,21 +158,20 @@ func applyTextEdit(lines []string, edit protocol.TextEdit, encoding powernap.Off
 
 		if len(newLines) == 1 {
 			// Single line change
-			result = append(result, prefix+newLines[0]+suffix)
+			region = []string{prefix + newLines[0] + suffix}
 		} else {
 			// Multi-line change
-			result = append(result, prefix+newLines[0])
-			result = append(result, newLines[1:len(newLines)-1]...)
-			result = append(result, newLines[len(newLines)-1]+suffix)
+			region = make([]string, 0, len(newLines))
+			region = append(region, prefix+newLines[0])
+			region = append(region, newLines[1:len(newLines)-1]...)
+			region = append(region, newLines[len(newLines)-1]+suffix)
 		}
 	}
 
-	// Add remaining lines
-	if endLine+1 < len(lines) {
-		result = append(result, lines[endLine+1:]...)
-	}
-
-	return result, nil
+	// Splice the replacement in place instead of rebuilding the whole slice.
+	// Callers apply edits from the bottom of the file upward, so mutating the
+	// shared slice does not disturb not-yet-applied (earlier) edits.
+	return slices.Replace(lines, startLine, endLine+1, region...), nil
 }
 
 // applyDocumentChange applies a DocumentChange (create/rename/delete operations)

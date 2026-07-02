@@ -108,13 +108,13 @@ func HandleDiagnostics(client *Client, params json.RawMessage) {
 		return
 	}
 
+	// Maintain the running total incrementally: subtract the previous
+	// diagnostics for this URI (if any) and add the new ones. This avoids
+	// recounting every file's diagnostics on each notification.
+	previous, _ := client.diagnostics.Get(diagParams.URI)
 	client.diagnostics.Set(diagParams.URI, diagParams.Diagnostics)
-
-	// Calculate total diagnostic count
-	totalCount := 0
-	for _, diagnostics := range client.diagnostics.Seq2() {
-		totalCount += len(diagnostics)
-	}
+	delta := len(diagParams.Diagnostics) - len(previous)
+	totalCount := int(client.diagnosticsTotal.Add(int64(delta)))
 
 	// Trigger callback if set
 	if client.onDiagnosticsChanged != nil {
