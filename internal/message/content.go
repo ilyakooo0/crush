@@ -171,6 +171,18 @@ type Message struct {
 	CreatedAt        int64
 	UpdatedAt        int64
 	IsSummaryMessage bool
+
+	// textBuf and reasoningBuf accumulate streaming deltas in amortized
+	// O(1) so building a long response is O(n) rather than O(n²) (the
+	// naive `existing + delta` reallocated and copied the whole
+	// accumulated string on every token). They are nil until the first
+	// delta, unexported (never persisted), and deliberately dropped by
+	// Clone: only the streaming message that owns them ever appends, so
+	// no other goroutine touches the builder. Snapshots observe an
+	// immutable prefix of the builder's append-only buffer, which is
+	// race-free to read concurrently.
+	textBuf      *strings.Builder
+	reasoningBuf *strings.Builder
 }
 
 func (m *Message) Content() TextContent {
@@ -221,6 +233,21 @@ func (m *Message) ToolCalls() []ToolCall {
 	return toolCalls
 }
 
+// toolCallStats returns the number of tool-call parts and how many of
+// them are finished, in a single pass without allocating (unlike
+// ToolCalls, which builds a slice). Used on the streaming hot path.
+func (m *Message) toolCallStats() (count, finished int) {
+	for _, part := range m.Parts {
+		if c, ok := part.(ToolCall); ok {
+			count++
+			if c.Finished {
+				finished++
+			}
+		}
+	}
+	return count, finished
+}
+
 func (m *Message) ToolResults() []ToolResult {
 	toolResults := make([]ToolResult, 0)
 	for _, part := range m.Parts {
@@ -266,37 +293,51 @@ func (m *Message) IsThinking() bool {
 }
 
 func (m *Message) AppendContent(delta string) {
-	found := false
-	for i, part := range m.Parts {
-		if c, ok := part.(TextContent); ok {
-			m.Parts[i] = TextContent{Text: c.Text + delta}
-			found = true
+	if m.textBuf == nil {
+		m.textBuf = &strings.Builder{}
+		// Seed from any pre-existing text part (e.g. a restored message);
+		// streaming messages start empty so this is normally a no-op.
+		for _, part := range m.Parts {
+			if c, ok := part.(TextContent); ok {
+				m.textBuf.WriteString(c.Text)
+				break
+			}
 		}
 	}
-	if !found {
-		m.Parts = append(m.Parts, TextContent{Text: delta})
+	m.textBuf.WriteString(delta)
+	text := m.textBuf.String()
+	for i, part := range m.Parts {
+		if _, ok := part.(TextContent); ok {
+			m.Parts[i] = TextContent{Text: text}
+			return
+		}
 	}
+	m.Parts = append(m.Parts, TextContent{Text: text})
 }
 
 func (m *Message) AppendReasoningContent(delta string) {
-	found := false
-	for i, part := range m.Parts {
-		if c, ok := part.(ReasoningContent); ok {
-			m.Parts[i] = ReasoningContent{
-				Thinking:   c.Thinking + delta,
-				Signature:  c.Signature,
-				StartedAt:  c.StartedAt,
-				FinishedAt: c.FinishedAt,
+	if m.reasoningBuf == nil {
+		m.reasoningBuf = &strings.Builder{}
+		for _, part := range m.Parts {
+			if c, ok := part.(ReasoningContent); ok {
+				m.reasoningBuf.WriteString(c.Thinking)
+				break
 			}
-			found = true
 		}
 	}
-	if !found {
-		m.Parts = append(m.Parts, ReasoningContent{
-			Thinking:  delta,
-			StartedAt: time.Now().Unix(),
-		})
+	m.reasoningBuf.WriteString(delta)
+	thinking := m.reasoningBuf.String()
+	for i, part := range m.Parts {
+		if c, ok := part.(ReasoningContent); ok {
+			c.Thinking = thinking
+			m.Parts[i] = c
+			return
+		}
 	}
+	m.Parts = append(m.Parts, ReasoningContent{
+		Thinking:  thinking,
+		StartedAt: time.Now().Unix(),
+	})
 }
 
 func (m *Message) AppendThoughtSignature(signature string, toolCallID string) {
@@ -450,6 +491,10 @@ func (m *Message) Clone() Message {
 	clone := *m
 	clone.Parts = make([]ContentPart, len(m.Parts))
 	copy(clone.Parts, m.Parts)
+	// Snapshots never stream; drop the accumulation builders so only the
+	// owning message ever appends to them (keeps them single-goroutine).
+	clone.textBuf = nil
+	clone.reasoningBuf = nil
 	return clone
 }
 

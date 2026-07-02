@@ -420,24 +420,19 @@ func shouldFlushNow(prev, next *Message) bool {
 		return true
 	}
 
-	var prevCalls []ToolCall
+	var prevCount, prevFinished int
 	var prevReasoningFinishedAt int64
 	if prev != nil {
-		prevCalls = prev.ToolCalls()
+		prevCount, prevFinished = prev.toolCallStats()
 		prevReasoningFinishedAt = prev.ReasoningContent().FinishedAt
 	}
-	nextCalls := next.ToolCalls()
-	if len(nextCalls) != len(prevCalls) {
+	nextCount, nextFinished := next.toolCallStats()
+	// The tool-call set grew, or a call transitioned to finished. Tool
+	// calls never un-finish and the count only grows, so comparing the
+	// finished counts is equivalent to the old per-index Finished check
+	// but allocation-free (a call's Input only matters once Finished).
+	if nextCount != prevCount || nextFinished != prevFinished {
 		return true
-	}
-	for i := range nextCalls {
-		// Bounds-safe: lengths are equal here.
-		if nextCalls[i].Finished != prevCalls[i].Finished {
-			return true
-		}
-		// A tool call's input only matters once it has landed (Finished
-		// flips true). Earlier deltas to Input are debounced with the
-		// rest of the streaming state.
 	}
 	if next.ReasoningContent().FinishedAt > 0 && prevReasoningFinishedAt == 0 {
 		return true
