@@ -72,7 +72,18 @@ func init() {
 			"where",
 		)
 	}
+
+	// Precompute the tokenized form of each safe command once, so
+	// isSafeReadOnly doesn't re-split on every call.
+	safeCommandTokens = make([][]string, len(safeCommands))
+	for i, safeCmd := range safeCommands {
+		safeCommandTokens[i] = strings.Fields(safeCmd)
+	}
 }
+
+// safeCommandTokens holds the tokenized form of safeCommands, populated in
+// init after any platform-specific entries are appended.
+var safeCommandTokens [][]string
 
 // isSafeReadOnly reports whether command is a single, simple, read-only
 // command that can run without a permission prompt.
@@ -133,8 +144,7 @@ func isSafeReadOnly(command string) bool {
 		return false
 	}
 
-	for _, safeCmd := range safeCommands {
-		tokens := strings.Fields(safeCmd)
+	for _, tokens := range safeCommandTokens {
 		if len(argv) < len(tokens) {
 			continue
 		}

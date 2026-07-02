@@ -258,7 +258,7 @@ func canonicalize(path string) string {
 
 // probeEnt checks if entity at given path exists and belongs to given owner
 func probeEnt(fspath string, owner int) error {
-	_, err := os.Stat(fspath)
+	info, err := os.Stat(fspath)
 	if err != nil {
 		return fmt.Errorf("cannot stat %s: %w", fspath, err)
 	}
@@ -268,12 +268,7 @@ func probeEnt(fspath string, owner int) error {
 		return nil
 	}
 
-	fowner, err := Owner(fspath)
-	if err != nil {
-		return fmt.Errorf("cannot get ownership for %s: %w", fspath, err)
-	}
-
-	if fowner != owner {
+	if ownerFromInfo(info) != owner {
 		return os.ErrPermission
 	}
 

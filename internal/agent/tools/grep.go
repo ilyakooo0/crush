@@ -235,6 +235,8 @@ func searchWithRipgrep(ctx context.Context, pattern, path, include string) ([]gr
 	}
 
 	var matches []grepMatch
+	// modTime is only used for sorting; stat each unique path once.
+	modTimes := make(map[string]time.Time)
 	for line := range bytes.SplitSeq(bytes.TrimSpace(output), []byte{'\n'}) {
 		if len(line) == 0 {
 			continue
@@ -247,13 +249,18 @@ func searchWithRipgrep(ctx context.Context, pattern, path, include string) ([]gr
 			continue
 		}
 		for _, m := range match.Data.Submatches {
-			fi, err := os.Stat(match.Data.Path.Text)
-			if err != nil {
-				continue // Skip files we can't access
+			modTime, ok := modTimes[match.Data.Path.Text]
+			if !ok {
+				fi, err := os.Stat(match.Data.Path.Text)
+				if err != nil {
+					continue // Skip files we can't access
+				}
+				modTime = fi.ModTime()
+				modTimes[match.Data.Path.Text] = modTime
 			}
 			matches = append(matches, grepMatch{
 				path:     match.Data.Path.Text,
-				modTime:  fi.ModTime(),
+				modTime:  modTime,
 				lineNum:  match.Data.LineNumber,
 				charNum:  m.Start + 1, // ensure 1-based
 				lineText: strings.TrimSpace(match.Data.Lines.Text),

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -252,7 +253,7 @@ func NewViewTool(
 
 			if hasMore {
 				output += fmt.Sprintf("\n\n(File has more lines. Use 'offset' parameter to read beyond line %d)",
-					params.Offset+len(strings.Split(content, "\n")))
+					params.Offset+strings.Count(content, "\n")+1)
 			}
 			output += "\n</file>\n"
 			output += getDiagnostics(filePath, lspManager)
@@ -284,24 +285,24 @@ func addLineNumbers(content string, startLine int) string {
 		return ""
 	}
 
-	lines := strings.Split(content, "\n")
-
-	var result []string
-	for i, line := range lines {
+	var b strings.Builder
+	for i, line := range strings.Split(content, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
 		line = strings.TrimSuffix(line, "\r")
 
-		lineNum := i + startLine
-		numStr := fmt.Sprintf("%d", lineNum)
-
-		if len(numStr) >= 6 {
-			result = append(result, fmt.Sprintf("%s|%s", numStr, line))
-		} else {
-			paddedNum := fmt.Sprintf("%6s", numStr)
-			result = append(result, fmt.Sprintf("%s|%s", paddedNum, line))
+		numStr := strconv.Itoa(i + startLine)
+		// Right-align to a width of 6 (numbers with >=6 digits are unpadded).
+		for pad := 6 - len(numStr); pad > 0; pad-- {
+			b.WriteByte(' ')
 		}
+		b.WriteString(numStr)
+		b.WriteByte('|')
+		b.WriteString(line)
 	}
 
-	return strings.Join(result, "\n")
+	return b.String()
 }
 
 func readTextFile(filePath string, offset, limit, maxContentSize int) (string, bool, error) {

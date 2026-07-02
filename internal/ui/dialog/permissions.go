@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/diffview"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -73,6 +74,13 @@ type Permissions struct {
 	diffXOffset          int   // horizontal scroll offset for diff view
 	unifiedDiffContent   string
 	splitDiffContent     string
+	// diffView is a persistent diff renderer, reused across scrolls/width
+	// changes so its syntax and diff caches are preserved.
+	diffView *diffview.DiffView
+
+	// Cached non-diff content, invalidated by viewportDirty or a width change.
+	cachedContent      string
+	cachedContentWidth int
 
 	help   help.Model
 	keyMap permissionsKeyMap
@@ -527,28 +535,44 @@ func prettyName(name string) string {
 }
 
 func (p *Permissions) renderContent(width int) string {
+	// Diff views manage their own caching (see renderDiff).
 	switch p.permission.ToolName {
-	case tools.BashToolName:
-		return p.renderBashContent(width)
 	case tools.EditToolName:
 		return p.renderEditContent(width)
 	case tools.WriteToolName:
 		return p.renderWriteContent(width)
 	case tools.MultiEditToolName:
 		return p.renderMultiEditContent(width)
-	case tools.DownloadToolName:
-		return p.renderDownloadContent(width)
-	case tools.FetchToolName:
-		return p.renderFetchContent(width)
-	case tools.AgenticFetchToolName:
-		return p.renderAgenticFetchContent(width)
-	case tools.ViewToolName:
-		return p.renderViewContent(width)
-	case tools.LSToolName:
-		return p.renderLSContent(width)
-	default:
-		return p.renderDefaultContent(width)
 	}
+
+	// Non-diff content is cached the same way the diff is: recompute only when
+	// the viewport is dirty or the width changed. This avoids re-running JSON
+	// (un)marshalling, syntax highlighting and wrapping on every frame.
+	if !p.viewportDirty && width == p.cachedContentWidth {
+		return p.cachedContent
+	}
+
+	var content string
+	switch p.permission.ToolName {
+	case tools.BashToolName:
+		content = p.renderBashContent(width)
+	case tools.DownloadToolName:
+		content = p.renderDownloadContent(width)
+	case tools.FetchToolName:
+		content = p.renderFetchContent(width)
+	case tools.AgenticFetchToolName:
+		content = p.renderAgenticFetchContent(width)
+	case tools.ViewToolName:
+		content = p.renderViewContent(width)
+	case tools.LSToolName:
+		content = p.renderLSContent(width)
+	default:
+		content = p.renderDefaultContent(width)
+	}
+
+	p.cachedContent = content
+	p.cachedContentWidth = width
+	return content
 }
 
 func (p *Permissions) renderBashContent(width int) string {
@@ -593,9 +617,17 @@ func (p *Permissions) renderDiff(filePath, oldContent, newContent string, conten
 	}
 
 	isSplitMode := p.isSplitMode()
-	formatter := common.DiffFormatter(p.com.Styles).
-		Before(fsext.PrettyPath(filePath), oldContent).
-		After(fsext.PrettyPath(filePath), newContent).
+
+	// Build the diff view once. Its content never changes for the lifetime of
+	// the dialog, so reusing it across scrolls and width changes preserves the
+	// syntax/diff caches; only XOffset/Width/layout are updated per render.
+	if p.diffView == nil {
+		p.diffView = common.DiffFormatter(p.com.Styles).
+			Before(fsext.PrettyPath(filePath), oldContent).
+			After(fsext.PrettyPath(filePath), newContent)
+	}
+
+	formatter := p.diffView.
 		XOffset(p.diffXOffset).
 		Width(contentWidth)
 

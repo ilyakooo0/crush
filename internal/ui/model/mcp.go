@@ -14,10 +14,17 @@ import (
 // mcpInfo renders the MCP status section showing active MCP clients and their
 // tool/prompt counts.
 func (m *UI) mcpInfo(width, maxItems int, isSection bool) string {
+	return m.mcpInfoSorted(m.com.Config().MCP.Sorted(), width, maxItems, isSection)
+}
+
+// mcpInfoSorted renders the MCP status section from an already-sorted MCP
+// config list, letting callers on the sidebar render path reuse a single
+// MCP.Sorted() result instead of recomputing it.
+func (m *UI) mcpInfoSorted(mcpSorted []config.MCP, width, maxItems int, isSection bool) string {
 	var mcps []mcp.ClientInfo
 	t := m.com.Styles
 
-	for _, mcp := range m.com.Config().MCP.Sorted() {
+	for _, mcp := range mcpSorted {
 		if state, ok := m.mcpStates[mcp.Name]; ok {
 			mcps = append(mcps, state)
 		}

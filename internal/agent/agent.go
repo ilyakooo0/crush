@@ -1449,7 +1449,10 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	return qErr
 }
 
-func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {
+// cacheControlOptions is computed once for the process lifetime: the env check
+// is constant and callers only read (never mutate) the returned map, so the
+// same shared value can be reused across the ~3 calls per step.
+var cacheControlOptions = sync.OnceValue(func() fantasy.ProviderOptions {
 	if t, _ := strconv.ParseBool(os.Getenv("CRUSH_DISABLE_ANTHROPIC_CACHE")); t {
 		return fantasy.ProviderOptions{}
 	}
@@ -1464,6 +1467,10 @@ func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {
 			CacheControl: anthropic.CacheControl{Type: "ephemeral"},
 		},
 	}
+})
+
+func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {
+	return cacheControlOptions()
 }
 
 func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentCall) (message.Message, error) {

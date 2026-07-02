@@ -28,7 +28,14 @@ var builtinSkillsCache struct {
 
 func cachedBuiltinSkills() []*skills.Skill {
 	builtinSkillsCache.once.Do(func() {
-		builtinSkillsCache.skills = skills.DiscoverBuiltin()
+		builtin := skills.DiscoverBuiltin()
+		// Sort once here rather than on every skillStatusItems call: the
+		// returned slice is shared, so sorting it in place repeatedly is
+		// wasted work (and mutates shared state on the render hot path).
+		slices.SortStableFunc(builtin, func(a, b *skills.Skill) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+		builtinSkillsCache.skills = builtin
 	})
 	return builtinSkillsCache.skills
 }
@@ -36,6 +43,13 @@ func cachedBuiltinSkills() []*skills.Skill {
 // skillsInfo renders the skill discovery status section showing loaded and
 // invalid skills.
 func (m *UI) skillsInfo(width, maxItems int, isSection bool) string {
+	return m.skillsInfoItems(m.skillStatusItems(), width, maxItems, isSection)
+}
+
+// skillsInfoItems renders the skill status section from an already-computed
+// item list, letting callers on the sidebar render path reuse a single
+// skillStatusItems() result instead of recomputing it.
+func (m *UI) skillsInfoItems(items []skillStatusItem, width, maxItems int, isSection bool) string {
 	t := m.com.Styles
 
 	title := t.Resource.Heading.Render("Skills")
@@ -43,7 +57,6 @@ func (m *UI) skillsInfo(width, maxItems int, isSection bool) string {
 		title = common.Section(t, title, width)
 	}
 
-	items := m.skillStatusItems()
 	if len(items) == 0 {
 		list := t.Resource.AdditionalText.Render("None")
 		return lipgloss.NewStyle().Width(width).Render(fmt.Sprintf("%s\n\n%s", title, list))
@@ -95,9 +108,6 @@ func (m *UI) skillStatusItems() []skillStatusItem {
 	}
 
 	builtin := cachedBuiltinSkills()
-	slices.SortStableFunc(builtin, func(a, b *skills.Skill) int {
-		return strings.Compare(a.Name, b.Name)
-	})
 	for _, skill := range builtin {
 		if _, ok := stateNames[skill.Name]; ok {
 			continue

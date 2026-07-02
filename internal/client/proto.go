@@ -661,11 +661,9 @@ func (c *Client) GetConfig(ctx context.Context, id string) (*config.Config, erro
 	return &cfg, nil
 }
 
-func jsonBody(v any) *bytes.Buffer {
-	b := new(bytes.Buffer)
+func jsonBody(v any) io.Reader {
 	m, _ := json.Marshal(v)
-	b.Write(m)
-	return b
+	return bytes.NewReader(m)
 }
 
 // SaveSession updates a session in a workspace, returning a proto type.

@@ -23,6 +23,21 @@ import (
 // ArgumentsID is the identifier for the arguments dialog.
 const ArgumentsID = "arguments"
 
+// argumentTitleCaser title-cases argument labels. It is stateless and safe to
+// reuse, so it is kept package-level to avoid rebuilding it on every Draw.
+var argumentTitleCaser = cases.Title(language.English)
+
+// prettyArgumentLabel converts an argument title into a human-friendly label.
+func prettyArgumentLabel(title string) string {
+	title = strings.ReplaceAll(title, "_", " ")
+	title = strings.ReplaceAll(title, "-", " ")
+	titleParts := strings.Fields(title)
+	for i, part := range titleParts {
+		titleParts[i] = argumentTitleCaser.String(strings.ToLower(part))
+	}
+	return strings.Join(titleParts, " ")
+}
+
 // Dialog sizing for arguments.
 const (
 	maxInputWidth        = 120
@@ -36,6 +51,7 @@ type Arguments struct {
 	com       *common.Common
 	title     string
 	arguments []commands.Argument
+	labels    []string // pretty labels, precomputed from argument titles
 	inputs    []textinput.Model
 	focused   int
 	spinner   spinner.Model
@@ -88,7 +104,9 @@ func NewArguments(com *common.Common, title, description string, arguments []com
 
 	// Create input fields for each argument.
 	a.inputs = make([]textinput.Model, len(arguments))
+	a.labels = make([]string, len(arguments))
 	for i, arg := range arguments {
+		a.labels[i] = prettyArgumentLabel(arg.Title)
 		input := textinput.New()
 		input.SetVirtualCursor(false)
 		input.SetStyles(com.Styles.TextInput)
@@ -262,20 +280,12 @@ func (a *Arguments) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	dialogContentStyle := s.Dialog.Arguments.Content
 	possibleWidth := area.Dx() - s.Dialog.View.GetHorizontalFrameSize() - dialogContentStyle.GetHorizontalFrameSize()
 	// Build fields with label and input.
-	caser := cases.Title(language.English)
-
 	var fields []string
 	for i, arg := range a.arguments {
 		isFocused := i == a.focused
 
-		// Try to pretty up the title for the label.
-		title := strings.ReplaceAll(arg.Title, "_", " ")
-		title = strings.ReplaceAll(title, "-", " ")
-		titleParts := strings.Fields(title)
-		for i, part := range titleParts {
-			titleParts[i] = caser.String(strings.ToLower(part))
-		}
-		labelText := strings.Join(titleParts, " ")
+		// Label was pretty-printed once at construction.
+		labelText := a.labels[i]
 
 		markRequiredStyle := s.Dialog.Arguments.InputRequiredMarkBlurred
 

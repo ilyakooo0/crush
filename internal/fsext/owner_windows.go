@@ -13,3 +13,10 @@ func Owner(path string) (int, error) {
 	}
 	return -1, nil
 }
+
+// ownerFromInfo derives the owner user ID from an already-obtained
+// os.FileInfo, avoiding a redundant stat. Windows does not resolve
+// ownership, so it always returns the bypass sentinel.
+func ownerFromInfo(_ os.FileInfo) int {
+	return -1
+}

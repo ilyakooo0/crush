@@ -149,8 +149,8 @@ func TestAssistantSectionCache_HashKeyDiscrimination(t *testing.T) {
 	itemA := NewAssistantMessageItem(&sty, msgA).(*AssistantMessageItem)
 	itemB := NewAssistantMessageItem(&sty, msgB).(*AssistantMessageItem)
 
-	thinkSrcA, _ := itemA.thinkingKey()
-	thinkSrcB, _ := itemB.thinkingKey()
+	thinkSrcA, _ := itemA.thinkingKey(0)
+	thinkSrcB, _ := itemB.thinkingKey(0)
 	require.NotEqual(t, thinkSrcA, thinkSrcB,
 		"distinct thinking text must produce distinct FNV-64 source hashes")
 
@@ -162,7 +162,7 @@ func TestAssistantSectionCache_HashKeyDiscrimination(t *testing.T) {
 	// Identical source text on a fresh item must produce the same
 	// hashes — keying invariant for cache hits.
 	itemAClone := NewAssistantMessageItem(&sty, thinkingMessage("a3", "thinking A", "content A")).(*AssistantMessageItem)
-	thinkSrcAClone, _ := itemAClone.thinkingKey()
+	thinkSrcAClone, _ := itemAClone.thinkingKey(0)
 	contentSrcAClone, _ := itemAClone.contentKey()
 	require.Equal(t, thinkSrcA, thinkSrcAClone)
 	require.Equal(t, contentSrcA, contentSrcAClone)

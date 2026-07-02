@@ -23,6 +23,9 @@ type FilterableList struct {
 	*List
 	items []FilterableItem
 	query string
+	// dirty tracks whether the filtered set needs to be recomputed. It is set
+	// by any mutation of items or query and cleared after Render recomputes.
+	dirty bool
 }
 
 // NewFilterableList creates a new filterable list.
@@ -39,6 +42,7 @@ func NewFilterableList(items ...FilterableItem) *FilterableList {
 // SetItems sets the list items and updates the filtered items.
 func (f *FilterableList) SetItems(items ...FilterableItem) {
 	f.items = items
+	f.dirty = true
 	fitems := make([]Item, len(items))
 	for i, item := range items {
 		fitems[i] = item
@@ -49,6 +53,7 @@ func (f *FilterableList) SetItems(items ...FilterableItem) {
 // AppendItems appends items to the list and updates the filtered items.
 func (f *FilterableList) AppendItems(items ...FilterableItem) {
 	f.items = append(f.items, items...)
+	f.dirty = true
 	itms := make([]Item, len(f.items))
 	for i, item := range f.items {
 		itms[i] = item
@@ -59,6 +64,7 @@ func (f *FilterableList) AppendItems(items ...FilterableItem) {
 // PrependItems prepends items to the list and updates the filtered items.
 func (f *FilterableList) PrependItems(items ...FilterableItem) {
 	f.items = append(items, f.items...)
+	f.dirty = true
 	itms := make([]Item, len(f.items))
 	for i, item := range f.items {
 		itms[i] = item
@@ -69,6 +75,7 @@ func (f *FilterableList) PrependItems(items ...FilterableItem) {
 // SetFilter sets the filter query and updates the list items.
 func (f *FilterableList) SetFilter(q string) {
 	f.query = q
+	f.dirty = true
 	f.List.SetItems(f.FilteredItems()...)
 	f.ScrollToTop()
 }
@@ -120,6 +127,9 @@ func (f *FilterableList) FilteredItems() []Item {
 
 // Render renders the filterable list.
 func (f *FilterableList) Render() string {
-	f.List.SetItems(f.FilteredItems()...)
+	if f.dirty {
+		f.List.SetItems(f.FilteredItems()...)
+		f.dirty = false
+	}
 	return f.List.Render()
 }

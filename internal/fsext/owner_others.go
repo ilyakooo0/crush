@@ -14,11 +14,14 @@ func Owner(path string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var uid int
+	return ownerFromInfo(info), nil
+}
+
+// ownerFromInfo derives the owner user ID from an already-obtained
+// os.FileInfo, avoiding a redundant stat.
+func ownerFromInfo(info os.FileInfo) int {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		uid = int(stat.Uid)
-	} else {
-		uid = os.Getuid()
+		return int(stat.Uid)
 	}
-	return uid, nil
+	return os.Getuid()
 }

@@ -2,13 +2,20 @@ package diffview
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
 )
 
 func pad(v any, width int) string {
-	s := fmt.Sprintf("%v", v)
+	var s string
+	switch n := v.(type) {
+	case int:
+		s = strconv.Itoa(n)
+	default:
+		s = fmt.Sprintf("%v", v)
+	}
 	w := ansi.StringWidth(s)
 	if w >= width {
 		return s

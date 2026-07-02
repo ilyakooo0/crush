@@ -38,6 +38,7 @@ import (
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/history"
 	"github.com/charmbracelet/crush/internal/home"
+	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
@@ -265,6 +266,13 @@ type UI struct {
 
 	// lsp
 	lspStates map[string]workspace.LSPClientInfo
+	// lspDiagnostics mirrors the per-LSP diagnostic severity counts
+	// locally. It is refreshed only when an LSP event arrives (the same
+	// events that already refresh lspStates), so the sidebar fingerprint
+	// — computed every frame — can read the split counts without issuing
+	// a per-LSP diagnostics RPC (which, in client mode, fetches and
+	// decodes every diagnostic).
+	lspDiagnostics map[string]lsp.DiagnosticCounts
 
 	// mcp
 	mcpStates map[string]mcp.ClientInfo
@@ -281,6 +289,16 @@ type UI struct {
 	sidebarView     string
 	sidebarCacheKey uint64
 	hasSidebarCache bool
+
+	// selectedLargeModel cache: resolving the selected large model hits
+	// the agent coordinator, which is an RPC (AgentIsReady + AgentModel)
+	// in client mode. Because the sidebar fingerprint runs every frame we
+	// cache the resolved model keyed by a cheap, locally-cached config
+	// fingerprint and only re-fetch when that changes. A nil result is
+	// never cached so the not-ready → ready transition is picked up on
+	// the next frame.
+	largeModel         *workspace.AgentModel
+	largeModelCacheKey string
 
 	// Notification state
 	notifyBackend       notification.Backend
@@ -390,6 +408,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		attachments:         attachments,
 		todoSpinner:         todoSpinner,
 		lspStates:           make(map[string]workspace.LSPClientInfo),
+		lspDiagnostics:      make(map[string]lsp.DiagnosticCounts),
 		mcpStates:           make(map[string]mcp.ClientInfo),
 		notifyBackend:       notification.NoopBackend{},
 		notifyWindowFocused: true,
@@ -783,9 +802,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pubsub.Event[history.File]:
 		cmds = append(cmds, m.handleFileEvent(msg.Payload))
 	case pubsub.Event[app.LSPEvent]:
-		m.lspStates = m.com.Workspace.LSPGetStates()
+		m.refreshLSPState()
 	case pubsub.Event[workspace.LSPEvent]:
-		m.lspStates = m.com.Workspace.LSPGetStates()
+		m.refreshLSPState()
 	case pubsub.Event[skills.Event]:
 		m.skillStates = msg.Payload.States
 	case pubsub.Event[mcp.Event]:
@@ -2410,6 +2429,13 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 
 // drawHeader draws the header section of the UI.
 func (m *UI) drawHeader(scr uv.Screen, area uv.Rectangle) {
+	// Sum diagnostics from the local LSP mirror instead of an
+	// LSPGetStates RPC per frame; m.lspStates is refreshed on every LSP
+	// event, so the total changes exactly when the header would.
+	lspErrorCount := 0
+	for _, info := range m.lspStates {
+		lspErrorCount += info.DiagnosticCount
+	}
 	m.header.drawHeader(
 		scr,
 		area,
@@ -2418,6 +2444,7 @@ func (m *UI) drawHeader(scr uv.Screen, area uv.Rectangle) {
 		m.detailsOpen,
 		area.Dx(),
 		m.hyperCredits,
+		lspErrorCount,
 	)
 }
 
@@ -2564,16 +2591,36 @@ func (m *UI) View() tea.View {
 	canvas := uv.NewScreenBuffer(m.width, m.height)
 	v.Cursor = m.Draw(canvas, canvas.Bounds())
 
-	content := strings.ReplaceAll(canvas.Render(), "\r\n", "\n") // normalize newlines
-	contentLines := strings.Split(content, "\n")
-	for i, line := range contentLines {
-		// Trim trailing spaces for concise rendering
-		contentLines[i] = strings.TrimRight(line, " ")
+	// Single pass over the rendered screen: normalize \r\n → \n and trim
+	// trailing spaces per line, writing straight into one builder instead
+	// of allocating a replaced copy, a line slice, and a joined copy.
+	rendered := canvas.Render()
+	var sb strings.Builder
+	sb.Grow(len(rendered))
+	start := 0
+	for i := 0; i <= len(rendered); i++ {
+		if i < len(rendered) && rendered[i] != '\n' {
+			continue
+		}
+		line := rendered[start:i]
+		// Drop a single trailing '\r' immediately before the newline
+		// (the \r\n → \n normalization).
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		// Trim trailing spaces only (matches strings.TrimRight(line, " ")).
+		end := len(line)
+		for end > 0 && line[end-1] == ' ' {
+			end--
+		}
+		sb.WriteString(line[:end])
+		if i < len(rendered) {
+			sb.WriteByte('\n')
+		}
+		start = i + 1
 	}
 
-	content = strings.Join(contentLines, "\n")
-
-	v.Content = content
+	v.Content = sb.String()
 	if m.progressBarEnabled && m.sendProgressBar && m.isAgentBusy() {
 		// HACK: use a random percentage to prevent ghostty from hiding it
 		// after a timeout.
@@ -2945,7 +2992,8 @@ func (m *UI) generateLayout(w, h int) uiLayout {
 	appRect.Min.X += 1
 	appRect.Max.X -= 1
 
-	if slices.Contains([]uiState{uiOnboarding, uiInitialize, uiLanding}, m.state) {
+	switch m.state {
+	case uiOnboarding, uiInitialize, uiLanding:
 		// extra padding on left and right for these states
 		appRect.Min.X += 1
 		appRect.Max.X -= 1

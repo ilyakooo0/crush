@@ -201,6 +201,35 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	// sub-agents each needing approval would queue behind one another.
 	// Per-request resolution is scoped by the pendingRequests map (keyed
 	// by request ID), so the wait needs no global lock.
+	// Resolve the target path and build the request before taking
+	// requestMu. os.Stat is a blocking syscall and none of this setup
+	// touches shared state (workingDir is immutable, uuid.New is
+	// self-contained), so it does not need to serialize with other
+	// in-flight requests.
+	fileInfo, err := os.Stat(opts.Path)
+	dir := opts.Path
+	if err == nil {
+		if fileInfo.IsDir() {
+			dir = opts.Path
+		} else {
+			dir = filepath.Dir(opts.Path)
+		}
+	}
+
+	if dir == "." {
+		dir = s.workingDir
+	}
+	permission := PermissionRequest{
+		ID:          uuid.New().String(),
+		Path:        dir,
+		SessionID:   opts.SessionID,
+		ToolCallID:  opts.ToolCallID,
+		ToolName:    opts.ToolName,
+		Description: opts.Description,
+		Action:      opts.Action,
+		Params:      opts.Params,
+	}
+
 	respCh, requestID, resolved, granted := func() (chan bool, string, bool, bool) {
 		s.requestMu.Lock()
 		defer s.requestMu.Unlock()
@@ -220,30 +249,6 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 				Granted:    true,
 			})
 			return nil, "", true, true
-		}
-
-		fileInfo, err := os.Stat(opts.Path)
-		dir := opts.Path
-		if err == nil {
-			if fileInfo.IsDir() {
-				dir = opts.Path
-			} else {
-				dir = filepath.Dir(opts.Path)
-			}
-		}
-
-		if dir == "." {
-			dir = s.workingDir
-		}
-		permission := PermissionRequest{
-			ID:          uuid.New().String(),
-			Path:        dir,
-			SessionID:   opts.SessionID,
-			ToolCallID:  opts.ToolCallID,
-			ToolName:    opts.ToolName,
-			Description: opts.Description,
-			Action:      opts.Action,
-			Params:      opts.Params,
 		}
 
 		if _, ok := s.sessionPermissions.Get(PermissionKey{

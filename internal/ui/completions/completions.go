@@ -230,11 +230,13 @@ func (c *Completions) applyNamePriorityFilter(query string) {
 	}
 
 	c.list.SetItems(c.allItems...)
+	// SetFilter computes the filtered set (a single fuzzy pass) and stores it
+	// in the list; read it back instead of recomputing via FilteredItems.
 	c.list.SetFilter(query)
-	raw := c.list.FilteredItems()
-	filtered := make([]list.FilterableItem, 0, len(raw))
-	for _, item := range raw {
-		filterable, ok := item.(list.FilterableItem)
+	n := c.list.Len()
+	filtered := make([]list.FilterableItem, 0, n)
+	for i := range n {
+		filterable, ok := c.list.ItemAt(i).(list.FilterableItem)
 		if !ok {
 			continue
 		}

@@ -42,6 +42,21 @@ type ShellItem struct {
 	sty             *styles.Styles
 	pending         bool
 	anim            *anim.Anim
+
+	// xOffset-independent render cache. The expensive part of RawRender
+	// (ANSI-reset trim, RemapANSI16, split, per-line width) does not
+	// depend on the horizontal scroll offset, yet hscroll/highlight
+	// Bump() forces a full re-render on every keystroke. Cache the
+	// prepared display lines keyed by the inputs that actually affect
+	// them, and reapply only the xOffset windowing per render.
+	shellCacheValid     bool
+	shellCacheOutput    string
+	shellCacheExpanded  bool
+	shellCacheWidth     int
+	shellCachePending   bool
+	shellCacheLines     []string
+	shellCacheTruncated int
+	shellCacheMaxWidth  int
 }
 
 var (
@@ -181,11 +196,94 @@ func (s *ShellItem) ScrollHorizontal(delta int) {
 	s.Bump()
 }
 
+// clearCache drops the base render cache and the xOffset-independent
+// output cache. The latter embeds the current theme's remapped ANSI
+// colors (via RemapANSI16), so a style change must re-run the remap.
+func (s *ShellItem) clearCache() {
+	s.cachedMessageItem.clearCache()
+	s.shellCacheValid = false
+}
+
 // ToggleExpanded toggles the expanded state and invalidates the cache.
 func (s *ShellItem) ToggleExpanded() bool {
 	s.expandedContent = !s.expandedContent
 	s.Bump()
 	return s.expandedContent
+}
+
+// prepareOutput computes the xOffset-independent render intermediate:
+// the trimmed, ANSI-remapped, split-and-truncated display lines plus the
+// max-line-width clamp value. The result is cached and only recomputed
+// when the output, expansion, capped width, or pending state change, so a
+// horizontal-scroll keystroke (which Bumps the list cache) no longer
+// re-runs the ANSI trim, RemapANSI16, split, and per-line width scan.
+func (s *ShellItem) prepareOutput(cappedWidth int) (displayLines []string, truncatedCount, maxLineWidth int) {
+	if s.shellCacheValid &&
+		s.shellCacheOutput == s.output &&
+		s.shellCacheExpanded == s.expandedContent &&
+		s.shellCacheWidth == cappedWidth &&
+		s.shellCachePending == s.pending {
+		return s.shellCacheLines, s.shellCacheTruncated, s.shellCacheMaxWidth
+	}
+
+	// Remap raw ANSI 16-color codes onto legible Charmtone colors so
+	// dark terminal defaults don't render illegibly on Crush's
+	// background.
+	// Strip trailing whitespace and bare ANSI resets before remapping.
+	// Programs like `task` emit "\x1b[0m\n" after their last line of
+	// output; trimming only "\n" misses these because the reset bytes
+	// sit between the content and the newline.
+	raw := s.output
+	for {
+		trimmed := strings.TrimRight(raw, " \t\r\n")
+		trimmed = strings.TrimSuffix(trimmed, "\x1b[0m")
+		if trimmed == raw {
+			break
+		}
+		raw = trimmed
+	}
+	output := common.RemapANSI16(raw, s.sty.ANSI)
+	lines := strings.Split(output, "\n")
+
+	// While streaming, show the tail of the output so the most recent
+	// lines stay visible without forcing the user to expand.
+	maxLines := shellMaxCollapsedLines
+	if s.expandedContent {
+		maxLines = len(lines)
+	}
+
+	displayLines = lines
+	truncatedCount = 0
+	if len(lines) > maxLines {
+		if s.pending {
+			// Show the most recent lines while still running.
+			displayLines = lines[len(lines)-maxLines:]
+		} else {
+			displayLines = lines[:maxLines]
+		}
+		truncatedCount = len(lines) - maxLines
+	}
+
+	// Compute max line width for scroll clamping.
+	maxW := 0
+	for _, ln := range displayLines {
+		w := ansi.StringWidth(ln)
+		if w > maxW {
+			maxW = w
+		}
+	}
+	maxLineWidth = max(0, maxW-cappedWidth)
+
+	s.shellCacheValid = true
+	s.shellCacheOutput = s.output
+	s.shellCacheExpanded = s.expandedContent
+	s.shellCacheWidth = cappedWidth
+	s.shellCachePending = s.pending
+	s.shellCacheLines = displayLines
+	s.shellCacheTruncated = truncatedCount
+	s.shellCacheMaxWidth = maxLineWidth
+
+	return displayLines, truncatedCount, maxLineWidth
 }
 
 func (s *ShellItem) RawRender(width int) string {
@@ -217,53 +315,8 @@ func (s *ShellItem) RawRender(width int) string {
 		return header
 	}
 
-	// Remap raw ANSI 16-color codes onto legible Charmtone colors so
-	// dark terminal defaults don't render illegibly on Crush's
-	// background.
-	// Strip trailing whitespace and bare ANSI resets before remapping.
-	// Programs like `task` emit "\x1b[0m\n" after their last line of
-	// output; trimming only "\n" misses these because the reset bytes
-	// sit between the content and the newline.
-	raw := s.output
-	for {
-		trimmed := strings.TrimRight(raw, " \t\r\n")
-		trimmed = strings.TrimSuffix(trimmed, "\x1b[0m")
-		if trimmed == raw {
-			break
-		}
-		raw = trimmed
-	}
-	output := common.RemapANSI16(raw, s.sty.ANSI)
-	lines := strings.Split(output, "\n")
-
-	// While streaming, show the tail of the output so the most recent
-	// lines stay visible without forcing the user to expand.
-	maxLines := shellMaxCollapsedLines
-	if s.expandedContent {
-		maxLines = len(lines)
-	}
-
-	displayLines := lines
-	truncatedCount := 0
-	if len(lines) > maxLines {
-		if s.pending {
-			// Show the most recent lines while still running.
-			displayLines = lines[len(lines)-maxLines:]
-		} else {
-			displayLines = lines[:maxLines]
-		}
-		truncatedCount = len(lines) - maxLines
-	}
-
-	// Compute max line width for scroll clamping.
-	maxW := 0
-	for _, ln := range displayLines {
-		w := ansi.StringWidth(ln)
-		if w > maxW {
-			maxW = w
-		}
-	}
-	s.maxLineWidth = max(0, maxW-cappedWidth)
+	displayLines, truncatedCount, maxLineWidth := s.prepareOutput(cappedWidth)
+	s.maxLineWidth = maxLineWidth
 
 	var body strings.Builder
 

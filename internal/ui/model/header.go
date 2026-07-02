@@ -30,6 +30,15 @@ type header struct {
 	com     *common.Common
 	width   int
 	compact bool
+
+	// compact-header render cache. drawHeader otherwise rebuilds the whole
+	// compact header (LSP loop, config/model lookups, several
+	// lipgloss.Render calls, PrettyPath+DirTrim, ansi.Truncate) every
+	// frame; memoize the rendered string keyed by a cheap fingerprint of
+	// everything it depends on.
+	compactCacheKey  string
+	compactCacheView string
+	hasCompactCache  bool
 }
 
 // newHeader creates a new header model.
@@ -59,9 +68,13 @@ func (h *header) refresh() {
 	// Force drawHeader to re-render the wide logo on the next frame.
 	h.width = 0
 	h.logo = ""
+	// The compact-header cache embeds the old theme's styles; drop it.
+	h.hasCompactCache = false
 }
 
-// drawHeader draws the header for the given session.
+// drawHeader draws the header for the given session. lspErrorCount is the
+// total diagnostic count summed by the caller from local LSP state, so
+// this render path never issues an LSPGetStates RPC.
 func (h *header) drawHeader(
 	scr uv.Screen,
 	area uv.Rectangle,
@@ -70,8 +83,8 @@ func (h *header) drawHeader(
 	detailsOpen bool,
 	width int,
 	hyperCredits *int,
+	lspErrorCount int,
 ) {
-	t := h.com.Styles
 	if width != h.width || compact != h.compact {
 		h.logo = renderLogo(h.com.Styles, compact, h.com.IsHyper(), width)
 	}
@@ -88,14 +101,56 @@ func (h *header) drawHeader(
 		return
 	}
 
+	key := h.compactFingerprint(session, detailsOpen, width, hyperCredits, lspErrorCount)
+	if !h.hasCompactCache || key != h.compactCacheKey {
+		h.compactCacheView = h.buildCompactHeader(session, detailsOpen, width, hyperCredits, lspErrorCount)
+		h.compactCacheKey = key
+		h.hasCompactCache = true
+	}
+
+	uv.NewStyledString(h.compactCacheView).Draw(scr, area)
+}
+
+// compactFingerprint hashes every input that affects the compact header
+// render, so drawHeader can reuse the cached string when nothing changed.
+func (h *header) compactFingerprint(
+	session *session.Session,
+	detailsOpen bool,
+	width int,
+	hyperCredits *int,
+	lspErrorCount int,
+) string {
+	var contextWindow int64
+	agentCfg := h.com.Config().Agents[config.AgentCoder]
+	if model := h.com.Config().GetModelByType(agentCfg.Model); model != nil {
+		contextWindow = model.ContextWindow
+	}
+	credits := 0
+	hasCredits := hyperCredits != nil
+	if hasCredits {
+		credits = *hyperCredits
+	}
+	return fmt.Sprintf("w=%d;sid=%s;ct=%d;pt=%d;eu=%t;lsp=%d;det=%t;hyper=%t;hc=%t/%d;cw=%d;cwd=%s",
+		width, session.ID,
+		session.CompletionTokens, session.PromptTokens, session.EstimatedUsage,
+		lspErrorCount, detailsOpen, h.com.IsHyper(), hasCredits, credits,
+		contextWindow, h.com.Workspace.WorkingDir())
+}
+
+// buildCompactHeader renders the compact header string.
+func (h *header) buildCompactHeader(
+	session *session.Session,
+	detailsOpen bool,
+	width int,
+	hyperCredits *int,
+	lspErrorCount int,
+) string {
+	t := h.com.Styles
+
 	var b strings.Builder
 	b.WriteString(h.compactLogo)
 
 	availDetailWidth := width - leftPadding - rightPadding - lipgloss.Width(b.String()) - minHeaderDiags - diagToDetailsSpacing
-	lspErrorCount := 0
-	for _, info := range h.com.Workspace.LSPGetStates() {
-		lspErrorCount += info.DiagnosticCount
-	}
 	details := renderHeaderDetails(
 		h.com,
 		session,
@@ -121,10 +176,7 @@ func (h *header) drawHeader(
 
 	b.WriteString(details)
 
-	view := uv.NewStyledString(
-		t.Header.Wrapper.Padding(0, rightPadding, 0, leftPadding).Render(b.String()),
-	)
-	view.Draw(scr, area)
+	return t.Header.Wrapper.Padding(0, rightPadding, 0, leftPadding).Render(b.String())
 }
 
 // renderHeaderDetails renders the details section of the header.

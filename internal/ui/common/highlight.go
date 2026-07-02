@@ -38,12 +38,14 @@ func chromaStyleKey(theme chroma.StyleEntries, bg color.Color) uint64 {
 		h.Write([]byte(theme[chroma.TokenType(tt)]))
 		h.Write([]byte{0})
 	}
-	r, g, b, a := bg.RGBA()
 	var buf [8]byte
-	buf[0] = byte(r >> 8)
-	buf[1] = byte(g >> 8)
-	buf[2] = byte(b >> 8)
-	buf[3] = byte(a >> 8)
+	if bg != nil {
+		r, g, b, a := bg.RGBA()
+		buf[0] = byte(r >> 8)
+		buf[1] = byte(g >> 8)
+		buf[2] = byte(b >> 8)
+		buf[3] = byte(a >> 8)
+	}
 	h.Write(buf[:4])
 	return h.Sum64()
 }

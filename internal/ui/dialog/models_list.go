@@ -1,9 +1,6 @@
 package dialog
 
 import (
-	"fmt"
-	"slices"
-	"sort"
 	"strings"
 
 	"github.com/charmbracelet/crush/internal/ui/list"
@@ -190,58 +187,56 @@ func (f *ModelsList) VisibleItems() []list.Item {
 		return items
 	}
 
-	filterableItems := make([]list.FilterableItem, 0, f.Len())
+	// Build the match text once across all items (O(N) rather than O(N*G)).
+	// Each entry is prefixed with its group's lowercased title, exactly as the
+	// previous per-group code matched against.
+	names := make([]string, 0, f.Len())
 	for _, g := range f.groups {
+		prefix := strings.ToLower(g.Title) + " "
 		for _, item := range g.Items {
-			filterableItems = append(filterableItems, item)
+			names = append(names, prefix+item.Filter())
 		}
 	}
 
+	// Single fuzzy pass, then bucket matches back to their group by index.
+	matches := fuzzy.Find(query, names)
+	matched := make([]*fuzzy.Match, len(names))
+	for i := range matches {
+		matched[matches[i].Index] = &matches[i]
+	}
+
 	items := []list.Item{}
-	visitedGroups := map[int]bool{}
 
-	// Reconstruct groups with matched items
-	// Find which group this item belongs to
-	for gi, g := range f.groups {
+	// Reconstruct groups with matched items, preserving original group and
+	// within-group item order.
+	idx := 0
+	for _, g := range f.groups {
+		prefixLen := len(strings.ToLower(g.Title) + " ")
 		addedCount := 0
-		name := strings.ToLower(g.Title) + " "
-
-		names := make([]string, len(filterableItems))
-		for i, item := range filterableItems {
-			ms := item.(*ModelItem)
-			names[i] = fmt.Sprintf("%s%s", name, ms.Filter())
-		}
-
-		matches := fuzzy.Find(query, names)
-
-		// Sort by original index to preserve order within the group
-		sort.SliceStable(matches, func(i, j int) bool {
-			return matches[i].Index < matches[j].Index
-		})
-
-		for _, match := range matches {
-			item := filterableItems[match.Index].(*ModelItem)
-			idxs := []int{}
-			for _, idx := range match.MatchedIndexes {
-				// Adjusts removing provider name highlights
-				if idx < len(name) {
-					continue
+		for _, item := range g.Items {
+			if m := matched[idx]; m != nil {
+				idxs := []int{}
+				for _, mIdx := range m.MatchedIndexes {
+					// Adjusts removing provider name highlights
+					if mIdx < prefixLen {
+						continue
+					}
+					idxs = append(idxs, mIdx-prefixLen)
 				}
-				idxs = append(idxs, idx-len(name))
-			}
 
-			match.MatchedIndexes = idxs
-			if slices.Contains(g.Items, item) {
-				if !visitedGroups[gi] {
+				match := *m
+				match.MatchedIndexes = idxs
+				if addedCount == 0 {
 					// Add section header
+					g := g
 					items = append(items, &g)
-					visitedGroups[gi] = true
 				}
 				// Add the matched item
 				item.SetMatch(match)
 				items = append(items, item)
 				addedCount++
 			}
+			idx++
 		}
 		if addedCount > 0 {
 			// Add a space separator after each provider section

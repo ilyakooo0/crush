@@ -27,6 +27,7 @@ const unavailableRetryDelay = 30 * time.Second
 type Manager struct {
 	clients     *csync.Map[string, *Client]
 	unavailable *csync.Map[string, time.Time]
+	rootMarkers *csync.Map[string, bool]
 	cfg         *config.ConfigStore
 	manager     *powernapconfig.Manager
 	callback    func(name string, client *Client)
@@ -63,6 +64,7 @@ func NewManager(cfg *config.ConfigStore) *Manager {
 	return &Manager{
 		clients:     csync.NewMap[string, *Client](),
 		unavailable: csync.NewMap[string, time.Time](),
+		rootMarkers: csync.NewMap[string, bool](),
 		cfg:         cfg,
 		manager:     manager,
 		callback:    func(string, *Client) {}, // default no-op callback
@@ -168,6 +170,14 @@ func (s *Manager) startServer(ctx context.Context, name, filepath string, server
 		}
 	}
 
+	// Cheap, pure string check first: if this server does not handle the
+	// file type at all, skip the expensive PATH lookup and workspace
+	// root-marker glob below. This gates the costly I/O on the zero-I/O
+	// filetype match, without changing whether the server ultimately starts.
+	if !handlesFiletype(server.Command, server.FileTypes, filepath) {
+		return
+	}
+
 	if !isUserConfigured {
 		if s.recentlyUnavailable(name) {
 			return
@@ -184,8 +194,8 @@ func (s *Manager) startServer(ctx context.Context, name, filepath string, server
 		}
 	}
 
-	// this is the slowest bit, so we do it last.
-	if !handles(server, filepath, s.cfg.WorkingDir()) {
+	// hasRootMarkers is the slowest bit (a workspace glob), so we do it last.
+	if !s.hasRootMarkers(s.cfg.WorkingDir(), server.RootMarkers) {
 		// nothing to do
 		return
 	}
@@ -329,6 +339,19 @@ func handlesFiletype(sname string, fileTypes []string, filePath string) bool {
 	return false
 }
 
+// hasRootMarkers reports whether dir contains any of the given root
+// markers. The result is invariant for a fixed (dir, markers) pair, so it
+// is memoized to avoid re-running the workspace glob on every file view.
+func (s *Manager) hasRootMarkers(dir string, markers []string) bool {
+	if len(markers) == 0 {
+		return true
+	}
+	key := dir + "\x00" + strings.Join(markers, "\x00")
+	return s.rootMarkers.GetOrSet(key, func() bool {
+		return hasRootMarkers(dir, markers)
+	})
+}
+
 func hasRootMarkers(dir string, markers []string) bool {
 	if len(markers) == 0 {
 		return true
@@ -343,11 +366,6 @@ func hasRootMarkers(dir string, markers []string) bool {
 		}
 	}
 	return false
-}
-
-func handles(server *powernapconfig.ServerConfig, filePath, workDir string) bool {
-	return handlesFiletype(server.Command, server.FileTypes, filePath) &&
-		hasRootMarkers(workDir, server.RootMarkers)
 }
 
 // KillAll force-kills all the LSP clients.

@@ -20,6 +20,23 @@ type LSPInfo struct {
 	Diagnostics map[protocol.DiagnosticSeverity]int
 }
 
+// refreshLSPState re-fetches the LSP client states and their per-severity
+// diagnostic counts into the local mirrors (m.lspStates / m.lspDiagnostics).
+// It is called from the LSP event handlers (state change / diagnostics
+// change) so the sidebar fingerprint — computed every frame — can read
+// fresh values from local state instead of issuing per-LSP diagnostics
+// RPCs on the render hot path. Every diagnostics change publishes an LSP
+// event (see internal/app/lsp_events.go), so the mirror always changes
+// whenever the rendered sidebar would.
+func (m *UI) refreshLSPState() {
+	m.lspStates = m.com.Workspace.LSPGetStates()
+	counts := make(map[string]lsp.DiagnosticCounts, len(m.lspStates))
+	for name := range m.lspStates {
+		counts[name] = m.com.Workspace.LSPGetDiagnosticCounts(name)
+	}
+	m.lspDiagnostics = counts
+}
+
 // lspInfo renders the LSP status section showing active LSP clients and their
 // diagnostic counts.
 func (m *UI) lspInfo(width, maxItems int, isSection bool) string {
@@ -32,7 +49,11 @@ func (m *UI) lspInfo(width, maxItems int, isSection bool) string {
 	var lsps []LSPInfo
 	for _, state := range states {
 		lspErrs := map[protocol.DiagnosticSeverity]int{}
-		counts := m.com.Workspace.LSPGetDiagnosticCounts(state.Name)
+		// Read from the local mirror (refreshed on every LSP event) rather
+		// than issuing a per-LSP diagnostics RPC on the render path. This
+		// also keeps the rendered counts consistent with the sidebar
+		// fingerprint, which reads the same mirror.
+		counts := m.lspDiagnostics[state.Name]
 		lspErrs[protocol.SeverityError] = counts.Error
 		lspErrs[protocol.SeverityWarning] = counts.Warning
 		lspErrs[protocol.SeverityHint] = counts.Hint

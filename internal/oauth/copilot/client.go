@@ -17,14 +17,20 @@ var assistantRolePattern = regexp.MustCompile(`"role"\s*:\s*"assistant"`)
 // NewClient creates a new HTTP client with a custom transport that adds the
 // X-Initiator header based on message history in the request body.
 func NewClient(isSubAgent, debug bool) *http.Client {
+	t := &initiatorTransport{debug: debug, isSubAgent: isSubAgent}
+	if debug {
+		// Build the debug HTTP client once and reuse it on every RoundTrip.
+		t.debugClient = log.NewHTTPClient()
+	}
 	return &http.Client{
-		Transport: &initiatorTransport{debug: debug, isSubAgent: isSubAgent},
+		Transport: t,
 	}
 }
 
 type initiatorTransport struct {
-	debug      bool
-	isSubAgent bool
+	debug       bool
+	isSubAgent  bool
+	debugClient *http.Client
 }
 
 func (t *initiatorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -36,6 +42,13 @@ func (t *initiatorTransport) RoundTrip(req *http.Request) (*http.Response, error
 
 	if req == nil {
 		return nil, fmt.Errorf("HTTP request is nil")
+	}
+	// Sub-agents are always attributed to the agent initiator regardless of
+	// body content, so short-circuit before reading/cloning the body.
+	if t.isSubAgent {
+		req.Header.Set(xInitiatorHeader, agentInitiator)
+		slog.Debug("Setting X-Initiator header to agent (sub-agent)")
+		return t.roundTrip(req)
 	}
 	if req.Body == nil || req.Body == http.NoBody {
 		// No body to inspect; default to user. A nil Body is valid for
@@ -62,7 +75,7 @@ func (t *initiatorTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// Check for assistant messages using regex to handle whitespace
 	// variations in the JSON while avoiding full unmarshalling overhead.
 	initiator := userInitiator
-	if assistantRolePattern.Match(bodyBytes) || t.isSubAgent {
+	if assistantRolePattern.Match(bodyBytes) {
 		slog.Debug("Setting X-Initiator header to agent (found assistant messages in history)")
 		initiator = agentInitiator
 	} else {
@@ -75,7 +88,7 @@ func (t *initiatorTransport) RoundTrip(req *http.Request) (*http.Response, error
 
 func (t *initiatorTransport) roundTrip(req *http.Request) (*http.Response, error) {
 	if t.debug {
-		return log.NewHTTPClient().Transport.RoundTrip(req)
+		return t.debugClient.Transport.RoundTrip(req)
 	}
 	return http.DefaultTransport.RoundTrip(req)
 }

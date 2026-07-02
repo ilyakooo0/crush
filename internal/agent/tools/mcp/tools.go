@@ -206,6 +206,20 @@ func ensureRawBytes(data []byte) []byte {
 }
 
 func normalizeBase64Input(data []byte) []byte {
+	// Fast path: if the data is all-ASCII and contains no whitespace, there is
+	// nothing for strings.Fields to strip, so avoid copying the (potentially
+	// multi-MB) payload. Bytes >= 0x80 could be part of a non-ASCII Unicode
+	// space that strings.Fields would strip, so fall back to the slow path.
+	fast := true
+	for _, b := range data {
+		if b >= 0x80 || b == ' ' || b == '\t' || b == '\n' || b == '\v' || b == '\f' || b == '\r' {
+			fast = false
+			break
+		}
+	}
+	if fast {
+		return data
+	}
 	normalized := strings.Join(strings.Fields(string(data)), "")
 	return []byte(normalized)
 }

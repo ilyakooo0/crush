@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/logo"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -130,8 +131,9 @@ func getDynamicHeightLimits(availableHeight, fileCount, lspCount, mcpCount, skil
 
 // sidebarFingerprint computes a hash of every input that affects the
 // rendered sidebar, so drawSidebar can reuse a cached render when nothing
-// changed.
-func (m *UI) sidebarFingerprint(area uv.Rectangle) uint64 {
+// changed. skillItems and mcpSorted are computed once per render by
+// drawSidebar and reused by buildSidebar to avoid recomputing them.
+func (m *UI) sidebarFingerprint(area uv.Rectangle, skillItems []skillStatusItem, mcpSorted []config.MCP) uint64 {
 	h := fnv.New64a()
 	fmt.Fprintf(h, "w=%d;h=%d;theme=%s;", area.Dx(), area.Dy(), m.themeKey)
 
@@ -177,7 +179,12 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle) uint64 {
 	sort.Strings(lspNames)
 	for _, name := range lspNames {
 		st := m.lspStates[name]
-		counts := m.com.Workspace.LSPGetDiagnosticCounts(name)
+		// Read the split diagnostic counts from the local mirror instead
+		// of issuing a per-LSP diagnostics RPC every frame. The mirror is
+		// refreshed on every LSP event (state or diagnostics change), the
+		// same events that keep m.lspStates fresh, so this changes exactly
+		// when the rendered LSP section would.
+		counts := m.lspDiagnostics[name]
 		// Hash the error text, not just its presence: the render prints
 		// the message, so a changed message within the same state must
 		// invalidate the cache.
@@ -187,7 +194,7 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle) uint64 {
 	}
 
 	// MCPs (config order, matching the render).
-	for _, mcpCfg := range m.com.Config().MCP.Sorted() {
+	for _, mcpCfg := range mcpSorted {
 		state, ok := m.mcpStates[mcpCfg.Name]
 		if !ok {
 			continue
@@ -198,7 +205,7 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle) uint64 {
 	}
 
 	// Skills.
-	for _, it := range m.skillStatusItems() {
+	for _, it := range skillItems {
 		fmt.Fprintf(h, "s=%s|%s|%s;", it.icon, it.name, it.title)
 	}
 
@@ -221,9 +228,15 @@ func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
 		return
 	}
 
-	key := m.sidebarFingerprint(area)
+	// Compute the skill items and sorted MCP list once per render and
+	// thread them through both the fingerprint and buildSidebar, instead
+	// of recomputing (clone+sort / map build) them several times.
+	skillItems := m.skillStatusItems()
+	mcpSorted := m.com.Config().MCP.Sorted()
+
+	key := m.sidebarFingerprint(area, skillItems, mcpSorted)
 	if !m.hasSidebarCache || key != m.sidebarCacheKey {
-		m.sidebarView = m.buildSidebar(area)
+		m.sidebarView = m.buildSidebar(area, skillItems, mcpSorted)
 		m.sidebarCacheKey = key
 		m.hasSidebarCache = true
 	}
@@ -231,8 +244,9 @@ func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
 	uv.NewStyledString(m.sidebarView).Draw(scr, area)
 }
 
-// buildSidebar renders the sidebar content block as a string.
-func (m *UI) buildSidebar(area uv.Rectangle) string {
+// buildSidebar renders the sidebar content block as a string. skillItems
+// and mcpSorted are precomputed by drawSidebar and reused here.
+func (m *UI) buildSidebar(area uv.Rectangle, skillItems []skillStatusItem, mcpSorted []config.MCP) string {
 	const logoHeightBreakpoint = 30
 
 	t := m.com.Styles
@@ -279,19 +293,19 @@ func (m *UI) buildSidebar(area uv.Rectangle) string {
 	lspsCount := len(m.lspStates)
 
 	mcpsCount := 0
-	for _, mcpCfg := range m.com.Config().MCP.Sorted() {
+	for _, mcpCfg := range mcpSorted {
 		if _, ok := m.mcpStates[mcpCfg.Name]; ok {
 			mcpsCount++
 		}
 	}
 
-	skillsCount := len(m.skillStatusItems())
+	skillsCount := len(skillItems)
 
 	maxFiles, maxLSPs, maxMCPs, maxSkills := getDynamicHeightLimits(remainingHeight, filesCount, lspsCount, mcpsCount, skillsCount)
 
 	lspSection := m.lspInfo(width, maxLSPs, true)
-	mcpSection := m.mcpInfo(width, maxMCPs, true)
-	skillsSection := m.skillsInfo(width, maxSkills, true)
+	mcpSection := m.mcpInfoSorted(mcpSorted, width, maxMCPs, true)
+	skillsSection := m.skillsInfoItems(skillItems, width, maxSkills, true)
 	filesSection := m.filesInfo(m.com.Workspace.WorkingDir(), width, maxFiles, true)
 
 	return lipgloss.NewStyle().

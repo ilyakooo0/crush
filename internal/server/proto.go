@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/charmbracelet/crush/internal/backend"
@@ -306,7 +305,12 @@ func (c *controllerV1) handleGetWorkspaceEvents(w http.ResponseWriter, r *http.R
 				continue
 			}
 
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			// Write the SSE frame in three chunks to avoid the
+			// []byte->string copy that a "%s"-formatted write would
+			// incur on the (potentially large) marshaled payload.
+			w.Write([]byte("data: "))
+			w.Write(data)
+			w.Write([]byte("\n\n"))
 			flusher.Flush()
 		}
 	}
@@ -382,11 +386,17 @@ func (c *controllerV1) handleGetWorkspaceSessions(w http.ResponseWriter, r *http
 		return
 	}
 	ws, _ := c.backend.GetWorkspace(id)
+	// Snapshot the client->session attachment counts once instead of
+	// re-scanning every client for each session (O(sessions x clients)).
+	var attachedCounts map[string]int
+	if ws != nil {
+		attachedCounts = ws.AttachedClientCountsBySession()
+	}
 	result := make([]proto.Session, len(sessions))
 	for i, s := range sessions {
 		result[i] = sessionToProto(s)
 		result[i].IsBusy = isSessionBusy(ws, s.ID)
-		result[i].AttachedClients = attachedClients(ws, s.ID)
+		result[i].AttachedClients = attachedCounts[s.ID]
 	}
 	jsonEncode(w, result)
 }

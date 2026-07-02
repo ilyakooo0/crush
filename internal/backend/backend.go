@@ -649,6 +649,24 @@ func (w *Workspace) AttachedClientsForSession(sessionID string) int {
 	return n
 }
 
+// AttachedClientCountsBySession returns, for every session with at least
+// one attached client, the number of clients currently viewing it. Only
+// clients with a live SSE stream (streams > 0) are counted; hold-only
+// clients (streams == 0) do not contribute. It acquires [clientsMu] once
+// and iterates the client set a single time, so callers that need counts
+// for many sessions avoid an O(sessions x clients) scan.
+func (w *Workspace) AttachedClientCountsBySession() map[string]int {
+	w.clientsMu.Lock()
+	defer w.clientsMu.Unlock()
+	counts := make(map[string]int)
+	for _, cs := range w.clients {
+		if cs.streams > 0 {
+			counts[cs.currentSessionID]++
+		}
+	}
+	return counts
+}
+
 // GetWorkspaceProto returns the proto representation of a workspace.
 func (b *Backend) GetWorkspaceProto(id string) (proto.Workspace, error) {
 	ws, err := b.GetWorkspace(id)

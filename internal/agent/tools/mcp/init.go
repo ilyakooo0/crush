@@ -55,10 +55,18 @@ func (s *ClientSession) Close() error {
 var (
 	sessions = csync.NewMap[string, *ClientSession]()
 	states   = csync.NewMap[string, ClientInfo]()
-	broker   = pubsub.NewBroker[Event]()
-	initOnce sync.Once
-	initDone = make(chan struct{})
+	// sessionLastOK records the last time a session was confirmed alive
+	// (successful ping or freshly created). Used to skip redundant pings
+	// within livenessTTL before each MCP tool call.
+	sessionLastOK = csync.NewMap[string, time.Time]()
+	broker        = pubsub.NewBroker[Event]()
+	initOnce      sync.Once
+	initDone      = make(chan struct{})
 )
+
+// livenessTTL is how long a session is trusted to be alive after a successful
+// ping/create before getOrRenewClient pings it again.
+const livenessTTL = 30 * time.Second
 
 // State represents the current state of an MCP client
 type State int
@@ -260,6 +268,7 @@ func initClient(ctx context.Context, cfg *config.ConfigStore, name string, m con
 	toolCount := updateTools(cfg, name, tools)
 	updatePrompts(name, prompts)
 	sessions.Set(name, session)
+	sessionLastOK.Set(name, time.Now())
 
 	updateState(name, StateConnected, nil, session, Counts{
 		Tools:   toolCount,
@@ -280,6 +289,7 @@ func DisableSingle(cfg *config.ConfigStore, name string) error {
 			slog.Warn("Error closing MCP session", "name", name, "error", err)
 		}
 		sessions.Del(name)
+		sessionLastOK.Del(name)
 	}
 
 	// Clear tools and prompts for this MCP.
@@ -299,6 +309,11 @@ func getOrRenewClient(ctx context.Context, cfg *config.ConfigStore, name string)
 		return nil, fmt.Errorf("mcp '%s' not available", name)
 	}
 
+	// Skip the ping if this session was confirmed alive very recently.
+	if last, ok := sessionLastOK.Get(name); ok && time.Since(last) < livenessTTL {
+		return sess, nil
+	}
+
 	m := cfg.Config().MCP[name]
 	state, _ := states.Get(name)
 
@@ -307,8 +322,10 @@ func getOrRenewClient(ctx context.Context, cfg *config.ConfigStore, name string)
 	defer cancel()
 	err := sess.Ping(pingCtx, nil)
 	if err == nil {
+		sessionLastOK.Set(name, time.Now())
 		return sess, nil
 	}
+	sessionLastOK.Del(name)
 	updateState(name, StateError, maybeTimeoutErr(err, timeout), nil, state.Counts)
 
 	sess, err = createSession(ctx, name, m, cfg.Resolver())
@@ -318,6 +335,7 @@ func getOrRenewClient(ctx context.Context, cfg *config.ConfigStore, name string)
 
 	updateState(name, StateConnected, nil, sess, state.Counts)
 	sessions.Set(name, sess)
+	sessionLastOK.Set(name, time.Now())
 	return sess, nil
 }
 
@@ -335,6 +353,7 @@ func updateState(name string, state State, err error, client *ClientSession, cou
 		info.ConnectedAt = time.Now()
 	case StateError:
 		sessions.Del(name)
+		sessionLastOK.Del(name)
 	}
 	states.Set(name, info)
 

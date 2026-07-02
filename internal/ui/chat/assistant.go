@@ -1,9 +1,7 @@
 package chat
 
 import (
-	"encoding/binary"
 	"fmt"
-	"hash/fnv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -93,11 +91,47 @@ func (s *assistantSection) reset() {
 	*s = assistantSection{}
 }
 
-// fnv64 hashes a single string with FNV-64.
+// FNV-64a constants. We fold bytes into a plain uint64 accumulator
+// rather than allocating a fnv.New64a per call: the returned
+// hash.Hash64 escapes to the heap, which is wasteful on the per-render
+// hashing hot path. The algorithm (offset basis, prime, xor-then-multiply)
+// is identical to hash/fnv, so hashes are byte-for-byte the same.
+const (
+	fnvOffset64 = 14695981039346656037
+	fnvPrime64  = 1099511628211
+)
+
+// fnvAddString folds s into an in-progress FNV-64a hash.
+func fnvAddString(h uint64, s string) uint64 {
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= fnvPrime64
+	}
+	return h
+}
+
+// fnvAddBytes folds b into an in-progress FNV-64a hash.
+func fnvAddBytes(h uint64, b []byte) uint64 {
+	for _, c := range b {
+		h ^= uint64(c)
+		h *= fnvPrime64
+	}
+	return h
+}
+
+// fnvAddU64 folds v's 8 little-endian bytes into an in-progress hash,
+// matching binary.LittleEndian.PutUint64 followed by a Write.
+func fnvAddU64(h, v uint64) uint64 {
+	for i := 0; i < 8; i++ {
+		h ^= uint64(byte(v >> (8 * i)))
+		h *= fnvPrime64
+	}
+	return h
+}
+
+// fnv64 hashes a single string with FNV-64a.
 func fnv64(s string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(s))
-	return h.Sum64()
+	return fnvAddString(fnvOffset64, s)
 }
 
 // fnvFields hashes a list of byte fields with length-prefix framing
@@ -106,14 +140,41 @@ func fnv64(s string) uint64 {
 // boundary between two fields). Each field is preceded by its
 // length encoded as 8 bytes little-endian.
 func fnvFields(fields ...[]byte) uint64 {
-	h := fnv.New64a()
-	var lenBuf [8]byte
+	h := uint64(fnvOffset64)
 	for _, f := range fields {
-		binary.LittleEndian.PutUint64(lenBuf[:], uint64(len(f)))
-		_, _ = h.Write(lenBuf[:])
-		_, _ = h.Write(f)
+		h = fnvAddU64(h, uint64(len(f)))
+		h = fnvAddBytes(h, f)
 	}
-	return h.Sum64()
+	return h
+}
+
+// assistantRenderKeys bundles the per-render cache keys and tool-call
+// count computed once at the top of Render/RawRender and threaded
+// through the render path, so each section's source text is hashed only
+// once and ToolCalls() is materialized only once per render.
+type assistantRenderKeys struct {
+	thinkSrc, thinkExtra     uint64
+	contentSrc, contentExtra uint64
+	errSrc, errExtra         uint64
+	toolCallCount            int
+}
+
+// renderKeys computes the per-render keys once. It calls ToolCalls()
+// exactly once and reuses its length everywhere the render path needs it.
+func (a *AssistantMessageItem) renderKeys() assistantRenderKeys {
+	toolCallCount := len(a.message.ToolCalls())
+	thinkSrc, thinkExtra := a.thinkingKey(toolCallCount)
+	contentSrc, contentExtra := a.contentKey()
+	errSrc, errExtra := a.errorKey()
+	return assistantRenderKeys{
+		thinkSrc:      thinkSrc,
+		thinkExtra:    thinkExtra,
+		contentSrc:    contentSrc,
+		contentExtra:  contentExtra,
+		errSrc:        errSrc,
+		errExtra:      errExtra,
+		toolCallCount: toolCallCount,
+	}
 }
 
 // AssistantMessageItem represents an assistant message in the chat UI.
@@ -208,14 +269,20 @@ func (a *AssistantMessageItem) ID() string {
 
 // RawRender implements [MessageItem].
 func (a *AssistantMessageItem) RawRender(width int) string {
+	return a.rawRender(width, a.renderKeys())
+}
+
+// rawRender renders the item using per-render keys computed once by the
+// caller, so the hashing/tool-call work is shared with Render.
+func (a *AssistantMessageItem) rawRender(width int, keys assistantRenderKeys) string {
 	cappedWidth := cappedMessageWidth(width)
 
 	var spinner string
-	if a.isSpinning() {
+	if a.isSpinningWithToolCalls(keys.toolCallCount) {
 		spinner = a.renderSpinning()
 	}
 
-	content, height := a.renderMessageContent(cappedWidth)
+	content, height := a.renderMessageContent(cappedWidth, keys)
 	highlightedContent := a.renderHighlighted(content, cappedWidth, height)
 	if spinner != "" {
 		if highlightedContent != "" {
@@ -243,21 +310,24 @@ func (a *AssistantMessageItem) Render(width int) string {
 	// drop. Bypass the cache while spinning (RawRender's spinner
 	// suffix changes every animation frame) or while a highlight
 	// range is active (selection drag).
-	useCache := !a.isSpinning() && !a.isHighlighted()
+	keys := a.renderKeys()
+	useCache := !a.isSpinningWithToolCalls(keys.toolCallCount) && !a.isHighlighted()
 	cappedWidth := cappedMessageWidth(width)
-	key := a.prefixCacheKey(cappedWidth)
+	key := a.prefixCacheKey(cappedWidth, keys)
 	if useCache {
 		if cached, ok := a.getCachedPrefixedRender(width, key); ok {
 			return cached
 		}
 	}
-	focused := a.sty.Messages.AssistantFocused.Render()
-	blurred := a.sty.Messages.AssistantBlurred.Render()
-	prefix := blurred
+	// Only render the style actually used; rendering both wastes work
+	// (lipgloss.Render is not free) when one is discarded.
+	var prefix string
 	if a.focused {
-		prefix = focused
+		prefix = a.sty.Messages.AssistantFocused.Render()
+	} else {
+		prefix = a.sty.Messages.AssistantBlurred.Render()
 	}
-	rendered := a.RawRender(width)
+	rendered := a.rawRender(width, keys)
 	lines := strings.Split(rendered, "\n")
 	var sb strings.Builder
 	for i, line := range lines {
@@ -283,27 +353,17 @@ func (a *AssistantMessageItem) Render(width int) string {
 // folded in too because it controls the composition of
 // renderMessageContent (e.g. appending the constant "Canceled"
 // string) — that decision lives outside any section's own hash.
-func (a *AssistantMessageItem) prefixCacheKey(cappedWidth int) uint64 {
-	thinkSrc, thinkExtra := a.thinkingKey()
-	contentSrc, contentExtra := a.contentKey()
-	errSrc, errExtra := a.errorKey()
-	h := fnv.New64a()
-	var buf [8]byte
-	writeU64 := func(v uint64) {
-		for i := range 8 {
-			buf[i] = byte(v >> (8 * i))
-		}
-		_, _ = h.Write(buf[:])
-	}
-	writeU64(uint64(cappedWidth))
-	writeU64(thinkSrc)
-	writeU64(thinkExtra)
-	writeU64(contentSrc)
-	writeU64(contentExtra)
-	writeU64(errSrc)
-	writeU64(errExtra)
-	writeU64(a.compositionKey())
-	fingerprint := h.Sum64()
+func (a *AssistantMessageItem) prefixCacheKey(cappedWidth int, keys assistantRenderKeys) uint64 {
+	h := uint64(fnvOffset64)
+	h = fnvAddU64(h, uint64(cappedWidth))
+	h = fnvAddU64(h, keys.thinkSrc)
+	h = fnvAddU64(h, keys.thinkExtra)
+	h = fnvAddU64(h, keys.contentSrc)
+	h = fnvAddU64(h, keys.contentExtra)
+	h = fnvAddU64(h, keys.errSrc)
+	h = fnvAddU64(h, keys.errExtra)
+	h = fnvAddU64(h, a.compositionKey())
+	fingerprint := h
 	var focusBit uint64
 	if a.focused {
 		focusBit = 1
@@ -332,20 +392,20 @@ func (a *AssistantMessageItem) compositionKey() uint64 {
 // content, and finish reason. Each section is served from its own cache;
 // only the section whose source text or extras changed since the last
 // render is recomputed.
-func (a *AssistantMessageItem) renderMessageContent(width int) (string, int) {
+func (a *AssistantMessageItem) renderMessageContent(width int, keys assistantRenderKeys) (string, int) {
 	var messageParts []string
 	thinking := strings.TrimSpace(a.message.ReasoningContent().Thinking)
 	content := strings.TrimSpace(a.message.Content().Text)
 
 	if thinking != "" {
-		messageParts = append(messageParts, a.cachedThinking(width))
+		messageParts = append(messageParts, a.cachedThinking(width, keys))
 	}
 
 	if content != "" {
 		if thinking != "" {
 			messageParts = append(messageParts, "")
 		}
-		messageParts = append(messageParts, a.cachedContent(width))
+		messageParts = append(messageParts, a.cachedContent(width, keys))
 	}
 
 	if a.message.IsFinished() {
@@ -353,7 +413,7 @@ func (a *AssistantMessageItem) renderMessageContent(width int) (string, int) {
 		case message.FinishReasonCanceled:
 			messageParts = append(messageParts, a.sty.Messages.AssistantCanceled.Render("Canceled"))
 		case message.FinishReasonError:
-			messageParts = append(messageParts, a.cachedError(width))
+			messageParts = append(messageParts, a.cachedError(width, keys))
 		}
 	}
 
@@ -366,11 +426,11 @@ func (a *AssistantMessageItem) renderMessageContent(width int) (string, int) {
 // thinking text that affects the rendered output: the view mode
 // (collapsed / tail-window / full) and the footer state (which
 // depends on IsThinking, ToolCalls, and ThinkingDuration).
-func (a *AssistantMessageItem) thinkingKey() (uint64, uint64) {
+func (a *AssistantMessageItem) thinkingKey(toolCallCount int) (uint64, uint64) {
 	thinking := a.message.ReasoningContent().Thinking
 	srcHash := fnv64(thinking)
 
-	showFooter := !a.message.IsThinking() || len(a.message.ToolCalls()) > 0
+	showFooter := !a.message.IsThinking() || toolCallCount > 0
 	var durationStr string
 	if showFooter {
 		duration := a.message.ThinkingDuration()
@@ -417,20 +477,20 @@ func (a *AssistantMessageItem) errorKey() (uint64, uint64) {
 // caching it on miss. The thinking-box height (used for click target
 // detection) is preserved across hits via assistantSection.aux so the
 // cached path never desyncs click detection.
-func (a *AssistantMessageItem) cachedThinking(width int) string {
-	srcHash, extra := a.thinkingKey()
+func (a *AssistantMessageItem) cachedThinking(width int, keys assistantRenderKeys) string {
+	srcHash, extra := keys.thinkSrc, keys.thinkExtra
 	if a.thinkingSec.hit(width, srcHash, extra) {
 		a.thinkingBoxHeight = a.thinkingSec.aux
 		return a.thinkingSec.out
 	}
-	out := a.renderThinking(a.message.ReasoningContent().Thinking, width)
+	out := a.renderThinking(a.message.ReasoningContent().Thinking, width, keys.toolCallCount)
 	a.thinkingSec.store(width, srcHash, extra, out, a.thinkingBoxHeight)
 	return out
 }
 
 // cachedContent returns the rendered content section.
-func (a *AssistantMessageItem) cachedContent(width int) string {
-	srcHash, extra := a.contentKey()
+func (a *AssistantMessageItem) cachedContent(width int, keys assistantRenderKeys) string {
+	srcHash, extra := keys.contentSrc, keys.contentExtra
 	if a.contentSec.hit(width, srcHash, extra) {
 		return a.contentSec.out
 	}
@@ -440,8 +500,8 @@ func (a *AssistantMessageItem) cachedContent(width int) string {
 }
 
 // cachedError returns the rendered error section.
-func (a *AssistantMessageItem) cachedError(width int) string {
-	srcHash, extra := a.errorKey()
+func (a *AssistantMessageItem) cachedError(width int, keys assistantRenderKeys) string {
+	srcHash, extra := keys.errSrc, keys.errExtra
 	if a.errorSec.hit(width, srcHash, extra) {
 		return a.errorSec.out
 	}
@@ -457,7 +517,7 @@ func (a *AssistantMessageItem) cachedError(width int) string {
 // boundary problem §4.4 of the design note flags. The bordered
 // ThinkingBox style is applied on top of the (already-windowed)
 // lines so the visual box matches what the user sees today.
-func (a *AssistantMessageItem) renderThinking(thinking string, width int) string {
+func (a *AssistantMessageItem) renderThinking(thinking string, width int, toolCallCount int) string {
 	renderer := common.QuietMarkdownRenderer(a.sty, width)
 
 	// Cap the raw text handed to glamour while the block is windowed.
@@ -509,7 +569,7 @@ func (a *AssistantMessageItem) renderThinking(thinking string, width int) string
 
 	var footer string
 	// if thinking is done add the thought for footer
-	if !a.message.IsThinking() || len(a.message.ToolCalls()) > 0 {
+	if !a.message.IsThinking() || toolCallCount > 0 {
 		duration := a.message.ThinkingDuration()
 		if duration.String() != "0s" {
 			footer = a.sty.Messages.ThinkingFooterTitle.Render("Thought for ") +
@@ -647,11 +707,16 @@ func (a *AssistantMessageItem) renderError(width int) string {
 
 // isSpinning returns true if the assistant message is still generating.
 func (a *AssistantMessageItem) isSpinning() bool {
+	return a.isSpinningWithToolCalls(len(a.message.ToolCalls()))
+}
+
+// isSpinningWithToolCalls is isSpinning given an already-computed
+// tool-call count, so the render path avoids re-materializing ToolCalls().
+func (a *AssistantMessageItem) isSpinningWithToolCalls(toolCallCount int) bool {
 	isThinking := a.message.IsThinking()
 	isFinished := a.message.IsFinished()
 	hasContent := strings.TrimSpace(a.message.Content().Text) != ""
-	hasToolCalls := len(a.message.ToolCalls()) > 0
-	return (isThinking || !isFinished) && !hasContent && !hasToolCalls
+	return (isThinking || !isFinished) && !hasContent && toolCallCount == 0
 }
 
 // SetMessage is used to update the underlying message. Only the
