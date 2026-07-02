@@ -201,73 +201,86 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 		return true, nil
 	}
 
-	s.requestMu.Lock()
-	defer s.requestMu.Unlock()
+	// Set up the request under requestMu, then release it *before*
+	// blocking on the human response. Holding requestMu across the wait
+	// would serialize every permission prompt process-wide, so parallel
+	// sub-agents each needing approval would queue behind one another.
+	// Per-request resolution is scoped by the pendingRequests map (keyed
+	// by request ID), so the wait needs no global lock.
+	respCh, requestID, resolved, granted := func() (chan bool, string, bool, bool) {
+		s.requestMu.Lock()
+		defer s.requestMu.Unlock()
 
-	// tell the UI that a permission was requested
-	s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
-		ToolCallID: opts.ToolCallID,
-	})
-
-	s.autoApproveSessionsMu.RLock()
-	autoApprove := s.autoApproveSessions[opts.SessionID]
-	s.autoApproveSessionsMu.RUnlock()
-
-	if autoApprove {
+		// tell the UI that a permission was requested
 		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
 			ToolCallID: opts.ToolCallID,
-			Granted:    true,
 		})
-		return true, nil
-	}
 
-	fileInfo, err := os.Stat(opts.Path)
-	dir := opts.Path
-	if err == nil {
-		if fileInfo.IsDir() {
-			dir = opts.Path
-		} else {
-			dir = filepath.Dir(opts.Path)
+		s.autoApproveSessionsMu.RLock()
+		autoApprove := s.autoApproveSessions[opts.SessionID]
+		s.autoApproveSessionsMu.RUnlock()
+
+		if autoApprove {
+			s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+				ToolCallID: opts.ToolCallID,
+				Granted:    true,
+			})
+			return nil, "", true, true
 		}
+
+		fileInfo, err := os.Stat(opts.Path)
+		dir := opts.Path
+		if err == nil {
+			if fileInfo.IsDir() {
+				dir = opts.Path
+			} else {
+				dir = filepath.Dir(opts.Path)
+			}
+		}
+
+		if dir == "." {
+			dir = s.workingDir
+		}
+		permission := PermissionRequest{
+			ID:          uuid.New().String(),
+			Path:        dir,
+			SessionID:   opts.SessionID,
+			ToolCallID:  opts.ToolCallID,
+			ToolName:    opts.ToolName,
+			Description: opts.Description,
+			Action:      opts.Action,
+			Params:      opts.Params,
+		}
+
+		if _, ok := s.sessionPermissions.Get(PermissionKey{
+			SessionID: permission.SessionID,
+			ToolName:  permission.ToolName,
+			Action:    permission.Action,
+			Path:      permission.Path,
+		}); ok {
+			s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+				ToolCallID: opts.ToolCallID,
+				Granted:    true,
+			})
+			return nil, "", true, true
+		}
+
+		s.activeRequestMu.Lock()
+		s.activeRequest = &permission
+		s.activeRequestMu.Unlock()
+
+		respCh := make(chan bool, 1)
+		s.pendingRequests.Set(permission.ID, respCh)
+
+		// Publish the request
+		s.Publish(pubsub.CreatedEvent, permission)
+		return respCh, permission.ID, false, false
+	}()
+
+	if resolved {
+		return granted, nil
 	}
-
-	if dir == "." {
-		dir = s.workingDir
-	}
-	permission := PermissionRequest{
-		ID:          uuid.New().String(),
-		Path:        dir,
-		SessionID:   opts.SessionID,
-		ToolCallID:  opts.ToolCallID,
-		ToolName:    opts.ToolName,
-		Description: opts.Description,
-		Action:      opts.Action,
-		Params:      opts.Params,
-	}
-
-	if _, ok := s.sessionPermissions.Get(PermissionKey{
-		SessionID: permission.SessionID,
-		ToolName:  permission.ToolName,
-		Action:    permission.Action,
-		Path:      permission.Path,
-	}); ok {
-		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
-			ToolCallID: opts.ToolCallID,
-			Granted:    true,
-		})
-		return true, nil
-	}
-
-	s.activeRequestMu.Lock()
-	s.activeRequest = &permission
-	s.activeRequestMu.Unlock()
-
-	respCh := make(chan bool, 1)
-	s.pendingRequests.Set(permission.ID, respCh)
-	defer s.pendingRequests.Del(permission.ID)
-
-	// Publish the request
-	s.Publish(pubsub.CreatedEvent, permission)
+	defer s.pendingRequests.Del(requestID)
 
 	select {
 	case <-ctx.Done():

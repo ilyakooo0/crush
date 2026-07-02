@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/crush/internal/version"
@@ -25,7 +26,10 @@ const (
 var (
 	client posthog.Client
 
-	baseProps = posthog.NewProperties().
+	// basePropsMu guards baseProps: the Set* mutators reassign it during
+	// startup while send() reads it concurrently from event goroutines.
+	basePropsMu sync.RWMutex
+	baseProps   = posthog.NewProperties().
 			Set("GOOS", runtime.GOOS).
 			Set("GOARCH", runtime.GOARCH).
 			Set("TERM", os.Getenv("TERM")).
@@ -36,14 +40,20 @@ var (
 )
 
 func SetNonInteractive(nonInteractive bool) {
+	basePropsMu.Lock()
+	defer basePropsMu.Unlock()
 	baseProps = baseProps.Set(nonInteractiveAttrName, nonInteractive)
 }
 
 func SetContinueBySessionID(continueBySessionID bool) {
+	basePropsMu.Lock()
+	defer basePropsMu.Unlock()
 	baseProps = baseProps.Set(continueSessionByIDAttrName, continueBySessionID)
 }
 
 func SetContinueLastSession(continueLastSession bool) {
+	basePropsMu.Lock()
+	defer basePropsMu.Unlock()
 	baseProps = baseProps.Set(continueLastSessionAttrName, continueLastSession)
 }
 
@@ -81,10 +91,13 @@ func send(event string, props ...any) {
 	if client == nil {
 		return
 	}
+	basePropsMu.RLock()
+	properties := pairsToProps(props...).Merge(baseProps)
+	basePropsMu.RUnlock()
 	err := client.Enqueue(posthog.Capture{
 		DistinctId: distinctId,
 		Event:      event,
-		Properties: pairsToProps(props...).Merge(baseProps),
+		Properties: properties,
 	})
 	if err != nil {
 		slog.Error("Failed to enqueue PostHog event", "event", event, "props", props, "error", err)
