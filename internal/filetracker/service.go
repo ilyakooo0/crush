@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/crush/internal/db"
@@ -58,9 +59,25 @@ func (s *service) LastReadTime(ctx context.Context, sessionID, path string) time
 	return time.Unix(readFile.ReadAt, 0)
 }
 
+// workingDir caches the process working directory. The working directory
+// cannot legitimately change during normal operation, so resolving it once
+// avoids an os.Getwd() syscall on every RecordRead/LastReadTime call.
+var (
+	workingDirOnce sync.Once
+	workingDir     string
+	workingDirErr  error
+)
+
+func getwd() (string, error) {
+	workingDirOnce.Do(func() {
+		workingDir, workingDirErr = os.Getwd()
+	})
+	return workingDir, workingDirErr
+}
+
 func relpath(path string) string {
 	path = filepath.Clean(path)
-	basepath, err := os.Getwd()
+	basepath, err := getwd()
 	if err != nil {
 		slog.Warn("Error getting basepath", "error", err)
 		return path
@@ -80,7 +97,7 @@ func (s *service) ListReadFiles(ctx context.Context, sessionID string) ([]string
 		return nil, fmt.Errorf("listing read files: %w", err)
 	}
 
-	basepath, err := os.Getwd()
+	basepath, err := getwd()
 	if err != nil {
 		return nil, fmt.Errorf("getting working directory: %w", err)
 	}

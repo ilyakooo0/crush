@@ -969,12 +969,26 @@ func hasAWSCredentials(env env.Env) bool {
 	return false
 }
 
+// migrateDisableNotificationsOnce guards migrateDisableNotifications so the
+// one-shot migration for the removed disable_notifications field runs at most
+// once per process. Without this, every config reload re-read both config
+// files and re-ran gjson scans over them even though the migration is only
+// meaningful on first run.
+var migrateDisableNotificationsOnce sync.Once
+
 // migrateDisableNotifications migrates the deprecated disable_notifications
 // field to notification_style. It checks both the user config (~/.config) and
 // data config (~/.local) files. If disable_notifications is true, it sets
 // notification_style to "disabled" in the data file. Regardless of value, it
 // removes disable_notifications from any file that contains it.
+//
+// It is safe to call from both Load and the reload path: the actual work runs
+// at most once per process via migrateDisableNotificationsOnce.
 func migrateDisableNotifications() {
+	migrateDisableNotificationsOnce.Do(migrateDisableNotificationsImpl)
+}
+
+func migrateDisableNotificationsImpl() {
 	globalConfig := GlobalConfig()
 	dataConfig := GlobalConfigData()
 

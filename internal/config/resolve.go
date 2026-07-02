@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/crush/internal/env"
@@ -92,6 +93,16 @@ func (r *shellVariableResolver) ResolveValue(value string) (string, error) {
 	// configs that relied on this validation still fail early.
 	if value == "$" {
 		return "", fmt.Errorf("invalid value format: %s", value)
+	}
+
+	// Fast path: a value with no shell-expansion metacharacters expands to
+	// itself, so we can skip materialising the process environment via
+	// r.env.Env() (which copies all of os.Environ()) and the whole shell
+	// round-trip. The metacharacter set mirrors shell.ExpandValue's own
+	// fast-path check ($, backtick, backslash, and both quote styles); any
+	// value lacking all of them is a literal and cannot expand.
+	if !strings.ContainsAny(value, "$`\\'\"") {
+		return value, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)

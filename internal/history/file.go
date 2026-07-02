@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -63,20 +64,22 @@ func (s *service) Create(ctx context.Context, sessionID, path, content string) (
 // number. If no previous versions exist for the path, it creates the initial
 // version. The provided content is stored as the new version.
 func (s *service) CreateVersion(ctx context.Context, sessionID, path, content string) (File, error) {
-	// Get the latest version for this path
-	files, err := s.q.ListFilesByPath(ctx, path)
+	// Get the latest version for this path. Only the version column is read
+	// (via ORDER BY version DESC LIMIT 1) to avoid loading every version's
+	// full content just to compute the max. Versions start at InitialVersion
+	// (0), so MAX cannot distinguish "no rows" from "only the initial
+	// version"; sql.ErrNoRows is the reliable signal for "no previous
+	// version", in which case we create the initial version.
+	maxVersion, err := s.q.GetMaxFileVersionByPath(ctx, path)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// No previous versions, create initial
+			return s.Create(ctx, sessionID, path, content)
+		}
 		return File{}, err
 	}
 
-	if len(files) == 0 {
-		// No previous versions, create initial
-		return s.Create(ctx, sessionID, path, content)
-	}
-
-	// Get the latest version
-	latestFile := files[0] // Files are ordered by version DESC, created_at DESC
-	nextVersion := latestFile.Version + 1
+	nextVersion := maxVersion + 1
 
 	return s.createWithVersion(ctx, sessionID, path, content, nextVersion)
 }

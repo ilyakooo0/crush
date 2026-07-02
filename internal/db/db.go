@@ -11,10 +11,10 @@ import (
 )
 
 type DBTX interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
 	PrepareContext(context.Context, string) (*sql.Stmt, error)
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
 }
 
 func New(db DBTX) *Queries {
@@ -65,6 +65,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	}
 	if q.getLastSessionStmt, err = db.PrepareContext(ctx, getLastSession); err != nil {
 		return nil, fmt.Errorf("error preparing query GetLastSession: %w", err)
+	}
+	if q.getMaxFileVersionByPathStmt, err = db.PrepareContext(ctx, getMaxFileVersionByPath); err != nil {
+		return nil, fmt.Errorf("error preparing query GetMaxFileVersionByPath: %w", err)
 	}
 	if q.getMessageStmt, err = db.PrepareContext(ctx, getMessage); err != nil {
 		return nil, fmt.Errorf("error preparing query GetMessage: %w", err)
@@ -208,6 +211,11 @@ func (q *Queries) Close() error {
 	if q.getLastSessionStmt != nil {
 		if cerr := q.getLastSessionStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getLastSessionStmt: %w", cerr)
+		}
+	}
+	if q.getMaxFileVersionByPathStmt != nil {
+		if cerr := q.getMaxFileVersionByPathStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing getMaxFileVersionByPathStmt: %w", cerr)
 		}
 	}
 	if q.getMessageStmt != nil {
@@ -378,6 +386,7 @@ type Queries struct {
 	getFileReadStmt                *sql.Stmt
 	getHourDayHeatmapStmt          *sql.Stmt
 	getLastSessionStmt             *sql.Stmt
+	getMaxFileVersionByPathStmt    *sql.Stmt
 	getMessageStmt                 *sql.Stmt
 	getRecentActivityStmt          *sql.Stmt
 	getSessionByIDStmt             *sql.Stmt
@@ -421,6 +430,7 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		getFileReadStmt:                q.getFileReadStmt,
 		getHourDayHeatmapStmt:          q.getHourDayHeatmapStmt,
 		getLastSessionStmt:             q.getLastSessionStmt,
+		getMaxFileVersionByPathStmt:    q.getMaxFileVersionByPathStmt,
 		getMessageStmt:                 q.getMessageStmt,
 		getRecentActivityStmt:          q.getRecentActivityStmt,
 		getSessionByIDStmt:             q.getSessionByIDStmt,

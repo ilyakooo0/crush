@@ -122,6 +122,21 @@ func (q *Queries) GetFileByPathAndSession(ctx context.Context, arg GetFileByPath
 	return i, err
 }
 
+const getMaxFileVersionByPath = `-- name: GetMaxFileVersionByPath :one
+SELECT version
+FROM files
+WHERE path = ?
+ORDER BY version DESC, created_at DESC
+LIMIT 1
+`
+
+func (q *Queries) GetMaxFileVersionByPath(ctx context.Context, path string) (int64, error) {
+	row := q.queryRow(ctx, q.getMaxFileVersionByPathStmt, getMaxFileVersionByPath, path)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
+}
+
 const listFilesByPath = `-- name: ListFilesByPath :many
 SELECT id, session_id, path, content, version, created_at, updated_at
 FROM files
@@ -202,11 +217,12 @@ const listLatestSessionFiles = `-- name: ListLatestSessionFiles :many
 SELECT f.id, f.session_id, f.path, f.content, f.version, f.created_at, f.updated_at
 FROM files f
 INNER JOIN (
-    SELECT path, MAX(version) as max_version, MAX(created_at) as max_created_at
-    FROM files
-    GROUP BY path
+    SELECT f2.path, MAX(f2.version) as max_version, MAX(f2.created_at) as max_created_at
+    FROM files f2
+    WHERE f2.session_id = ?1
+    GROUP BY f2.path
 ) latest ON f.path = latest.path AND f.version = latest.max_version AND f.created_at = latest.max_created_at
-WHERE f.session_id = ?
+WHERE f.session_id = ?1
 ORDER BY f.path
 `
 

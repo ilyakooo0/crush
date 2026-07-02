@@ -22,6 +22,13 @@ FROM files
 WHERE path = ?
 ORDER BY version DESC, created_at DESC;
 
+-- name: GetMaxFileVersionByPath :one
+SELECT version
+FROM files
+WHERE path = ?
+ORDER BY version DESC, created_at DESC
+LIMIT 1;
+
 -- name: CreateFile :one
 INSERT INTO files (
     id,
@@ -48,11 +55,12 @@ WHERE session_id = ?;
 SELECT f.*
 FROM files f
 INNER JOIN (
-    SELECT path, MAX(version) as max_version, MAX(created_at) as max_created_at
-    FROM files
-    GROUP BY path
+    SELECT f2.path, MAX(f2.version) as max_version, MAX(f2.created_at) as max_created_at
+    FROM files f2
+    WHERE f2.session_id = @session_id
+    GROUP BY f2.path
 ) latest ON f.path = latest.path AND f.version = latest.max_version AND f.created_at = latest.max_created_at
-WHERE f.session_id = ?
+WHERE f.session_id = @session_id
 ORDER BY f.path;
 
 -- name: ListNewFiles :many
