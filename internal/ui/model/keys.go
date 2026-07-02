@@ -4,14 +4,14 @@ import "charm.land/bubbles/v2/key"
 
 type KeyMap struct {
 	Editor struct {
-		AddFile     key.Binding
-		SendMessage key.Binding
-		OpenEditor  key.Binding
-		Newline     key.Binding
-		AddImage    key.Binding
-		PasteImage  key.Binding
-		MentionFile key.Binding
-		Commands    key.Binding
+		SendMessage  key.Binding
+		OpenEditor   key.Binding
+		Newline      key.Binding
+		AddImage     key.Binding
+		PasteImage   key.Binding
+		MentionFile  key.Binding
+		Commands     key.Binding
+		ShellCommand key.Binding
 
 		// Attachments key maps
 		AttachmentDeleteMode key.Binding
@@ -25,7 +25,6 @@ type KeyMap struct {
 
 	Chat struct {
 		NewSession     key.Binding
-		AddAttachment  key.Binding
 		Cancel         key.Binding
 		Tab            key.Binding
 		Details        key.Binding
@@ -67,6 +66,7 @@ type KeyMap struct {
 	Sessions   key.Binding
 	Tab        key.Binding
 	ToggleYolo key.Binding
+	CopyError  key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -103,12 +103,12 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+y"),
 			key.WithHelp("ctrl+y", "toggle yolo"),
 		),
+		CopyError: key.NewBinding(
+			key.WithKeys("ctrl+e"),
+			key.WithHelp("ctrl+e", "copy error"),
+		),
 	}
 
-	km.Editor.AddFile = key.NewBinding(
-		key.WithKeys("/"),
-		key.WithHelp("/", "add file"),
-	)
 	km.Editor.SendMessage = key.NewBinding(
 		key.WithKeys("enter"),
 		key.WithHelp("enter", "send"),
@@ -140,6 +140,14 @@ func DefaultKeyMap() KeyMap {
 		key.WithKeys("/"),
 		key.WithHelp("/", "commands"),
 	)
+	// ShellCommand is a help-only hint: bang (!) shell mode is entered by
+	// typing "!" at the start of an empty editor (see the bang-mode handling
+	// in ui.go), not via a key.Matches lookup, so this binding exists purely
+	// to surface the feature in the help view.
+	km.Editor.ShellCommand = key.NewBinding(
+		key.WithKeys("!"),
+		key.WithHelp("!", "shell command"),
+	)
 	km.Editor.AttachmentDeleteMode = key.NewBinding(
 		key.WithKeys("ctrl+r"),
 		key.WithHelp("ctrl+r+{i}", "delete attachment at index i"),
@@ -162,10 +170,6 @@ func DefaultKeyMap() KeyMap {
 	km.Chat.NewSession = key.NewBinding(
 		key.WithKeys("ctrl+n"),
 		key.WithHelp("ctrl+n", "new session"),
-	)
-	km.Chat.AddAttachment = key.NewBinding(
-		key.WithKeys("ctrl+f"),
-		key.WithHelp("ctrl+f", "add attachment"),
 	)
 	km.Chat.Cancel = key.NewBinding(
 		key.WithKeys("esc", "alt+esc"),
@@ -194,11 +198,11 @@ func DefaultKeyMap() KeyMap {
 
 	km.Chat.Down = key.NewBinding(
 		key.WithKeys("down", "ctrl+j", "j"),
-		key.WithHelp("↓", "down"),
+		key.WithHelp("↓/j", "down"),
 	)
 	km.Chat.Up = key.NewBinding(
 		key.WithKeys("up", "ctrl+k", "k"),
-		key.WithHelp("↑", "up"),
+		key.WithHelp("↑/k", "up"),
 	)
 	km.Chat.UpDown = key.NewBinding(
 		key.WithKeys("up", "down"),
@@ -206,11 +210,11 @@ func DefaultKeyMap() KeyMap {
 	)
 	km.Chat.UpOneItem = key.NewBinding(
 		key.WithKeys("shift+up", "K"),
-		key.WithHelp("shift+↑", "up one item"),
+		key.WithHelp("shift+↑/K", "up one item"),
 	)
 	km.Chat.DownOneItem = key.NewBinding(
 		key.WithKeys("shift+down", "J"),
-		key.WithHelp("shift+↓", "down one item"),
+		key.WithHelp("shift+↓/J", "down one item"),
 	)
 	km.Chat.UpDownOneItem = key.NewBinding(
 		key.WithKeys("shift+up", "shift+down"),

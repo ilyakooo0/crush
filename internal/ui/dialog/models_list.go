@@ -14,6 +14,11 @@ type ModelsList struct {
 	groups []ModelGroup
 	query  string
 	t      *styles.Styles
+
+	// emptyMessage is shown when there are no items and no active filter.
+	emptyMessage string
+	// filterEmptyMessage is shown when a filter is active but matches nothing.
+	filterEmptyMessage string
 }
 
 // NewModelsList creates a new list suitable for model items and groups.
@@ -247,8 +252,25 @@ func (f *ModelsList) VisibleItems() []list.Item {
 	return items
 }
 
+// SetEmptyMessage sets the placeholder shown when the list has no items and
+// no filter is active.
+func (f *ModelsList) SetEmptyMessage(msg string) {
+	f.emptyMessage = msg
+}
+
+// SetFilterEmptyMessage sets the placeholder shown when a filter is active but
+// yields no matches.
+func (f *ModelsList) SetFilterEmptyMessage(msg string) {
+	f.filterEmptyMessage = msg
+}
+
 // Render renders the filterable list.
 func (f *ModelsList) Render() string {
+	if f.query != "" && f.filterEmptyMessage != "" {
+		f.List.SetEmptyMessage(f.filterEmptyMessage)
+	} else {
+		f.List.SetEmptyMessage(f.emptyMessage)
+	}
 	return f.List.Render()
 }
 

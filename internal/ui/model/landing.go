@@ -86,7 +86,8 @@ func (m *UI) landingView() string {
 		cwd,
 	}
 
-	parts = append(parts, "", m.modelInfo(width))
+	cta := t.Resource.AdditionalText.Render("Type a message to begin · / for commands · ctrl+s for sessions")
+	parts = append(parts, "", m.modelInfo(width), "", cta)
 	infoSection := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	var remainingHeightArea image.Rectangle
@@ -95,13 +96,25 @@ func (m *UI) landingView() string {
 		layout.Fill(1),
 	).Split(m.layout.main).Assign(new(image.Rectangle), &remainingHeightArea)
 
-	mcpLspSectionWidth := min(30, (width-2)/3)
-
-	lspSection := m.lspInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
-	mcpSection := m.mcpInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
-	skillsSection := m.skillsInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
-
-	content := lipgloss.JoinHorizontal(lipgloss.Left, lspSection, " ", mcpSection, " ", skillsSection)
+	// On narrow terminals the three side-by-side sections get squeezed to a
+	// few columns each, so stack them vertically instead. narrowLandingWidth
+	// is the point below which a 3-column split would leave each column under
+	// ~20 cells wide ((width-2)/3 < 20).
+	const narrowLandingWidth = 60
+	var content string
+	if width < narrowLandingWidth {
+		perSection := max(1, remainingHeightArea.Dy()/3)
+		lspSection := m.lspInfo(width, perSection, false)
+		mcpSection := m.mcpInfo(width, perSection, false)
+		skillsSection := m.skillsInfo(width, perSection, false)
+		content = lipgloss.JoinVertical(lipgloss.Left, lspSection, "", mcpSection, "", skillsSection)
+	} else {
+		mcpLspSectionWidth := min(30, (width-2)/3)
+		lspSection := m.lspInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
+		mcpSection := m.mcpInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
+		skillsSection := m.skillsInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
+		content = lipgloss.JoinHorizontal(lipgloss.Left, lspSection, " ", mcpSection, " ", skillsSection)
+	}
 
 	return lipgloss.NewStyle().
 		Width(width).

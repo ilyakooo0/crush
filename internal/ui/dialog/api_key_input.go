@@ -40,8 +40,9 @@ type APIKeyInput struct {
 	model     config.SelectedModel
 	modelType config.SelectedModelType
 
-	width int
-	state APIKeyInputState
+	width  int
+	state  APIKeyInputState
+	errMsg string // reason for the last verification failure
 
 	keyMap struct {
 		Submit key.Binding
@@ -91,7 +92,7 @@ func NewAPIKeyInput(
 
 	m.keyMap.Submit = key.NewBinding(
 		key.WithKeys("enter", "ctrl+y"),
-		key.WithHelp("enter", "submit"),
+		key.WithHelp("enter", "confirm"),
 	)
 	m.keyMap.Close = CloseKey
 
@@ -110,8 +111,11 @@ func (m *APIKeyInput) HandleMsg(msg tea.Msg) Action {
 		m.state = msg.State
 		switch m.state {
 		case APIKeyInputStateVerifying:
+			m.errMsg = ""
 			cmd := tea.Batch(m.spinner.Tick, m.verifyAPIKey)
 			return ActionCmd{cmd}
+		case APIKeyInputStateError:
+			m.errMsg = msg.Reason
 		}
 	case spinner.TickMsg:
 		switch m.state {
@@ -169,14 +173,23 @@ func (m *APIKeyInput) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 
 	m.input.Prompt = m.spinner.View()
 
-	content := strings.Join([]string{
+	lines := []string{
 		m.headerView(),
 		inputStyle.Render(m.inputView()),
+	}
+	if m.state == APIKeyInputStateError && m.errMsg != "" {
+		errStyle := textStyle.
+			Foreground(charmtone.Cherry).
+			Width(m.width - dialogStyle.GetHorizontalFrameSize())
+		lines = append(lines, errStyle.Render(m.errMsg))
+	}
+	lines = append(lines,
 		textStyle.Render("This will be written in your global configuration:"),
 		textStyle.Render(config.GlobalConfigData()),
 		"",
 		helpStyle.Render(m.help.View(m)),
-	}, "\n")
+	)
+	content := strings.Join(lines, "\n")
 
 	cur := m.Cursor()
 
@@ -301,9 +314,43 @@ func (m *APIKeyInput) verifyAPIKey() tea.Msg {
 	}
 
 	if err == nil {
-		return ActionChangeAPIKeyState{APIKeyInputStateVerified}
+		return ActionChangeAPIKeyState{State: APIKeyInputStateVerified}
 	}
-	return ActionChangeAPIKeyState{APIKeyInputStateError}
+	return ActionChangeAPIKeyState{
+		State:  APIKeyInputStateError,
+		Reason: apiKeyErrorReason(err),
+	}
+}
+
+// apiKeyErrorReason maps a TestConnection error to a concise, user-facing
+// explanation. Common cases (auth, permission, network) get a friendly hint;
+// anything else falls back to the raw error message.
+func apiKeyErrorReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	low := strings.ToLower(msg)
+	switch {
+	case strings.Contains(low, "401"),
+		strings.Contains(low, "unauthorized"),
+		strings.Contains(low, "invalid api key"),
+		strings.Contains(low, "invalid_api_key"),
+		strings.Contains(low, "authentication"):
+		return "Authentication failed — the key was rejected (401)."
+	case strings.Contains(low, "403"),
+		strings.Contains(low, "forbidden"):
+		return "Access forbidden (403) — the key may lack permissions."
+	case strings.Contains(low, "no such host"),
+		strings.Contains(low, "timeout"),
+		strings.Contains(low, "timed out"),
+		strings.Contains(low, "connection refused"),
+		strings.Contains(low, "network"),
+		strings.Contains(low, "dial tcp"):
+		return "Network error — could not reach the provider."
+	default:
+		return msg
+	}
 }
 
 func (m *APIKeyInput) saveKeyAndContinue() Action {

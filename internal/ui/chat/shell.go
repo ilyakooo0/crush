@@ -324,7 +324,7 @@ func (s *ShellItem) RawRender(width int) string {
 	// the "more lines" notice before the output.
 	if truncatedCount > 0 && s.pending {
 		body.WriteString(s.sty.Messages.ShellTruncation.Render(
-			fmt.Sprintf("… %d earlier lines", truncatedCount),
+			fmt.Sprintf(assistantMessageTailWindowFormat, truncatedCount),
 		))
 		body.WriteString("\n")
 	}
@@ -342,7 +342,7 @@ func (s *ShellItem) RawRender(width int) string {
 	// When finished, hidden lines are below, so show the notice after.
 	if truncatedCount > 0 && !s.pending && !s.expandedContent {
 		body.WriteString(s.sty.Messages.ShellTruncation.Render(
-			fmt.Sprintf("… %d more lines", truncatedCount),
+			fmt.Sprintf(assistantMessageTruncateFormat, truncatedCount),
 		))
 		return header + "\n" + body.String()
 	}

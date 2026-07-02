@@ -27,6 +27,11 @@ import (
 // responseContextHeight limits the number of lines displayed in tool output.
 const responseContextHeight = 10
 
+// diffContextHeight limits the number of lines displayed in code-edit
+// diffs before truncation. Diffs get a larger default cap than plain
+// tool output so most of a change is visible without expanding.
+const diffContextHeight = 30
+
 // toolBodyLeftPaddingTotal represents the padding that should be applied to each tool body
 const toolBodyLeftPaddingTotal = 2
 
@@ -528,7 +533,7 @@ func toolEarlyStateContent(sty *styles.Styles, opts *ToolRenderOpts, width int) 
 	var msg string
 	switch opts.Status {
 	case ToolStatusError:
-		msg = toolErrorContent(sty, opts.Result, width)
+		msg = toolErrorContent(sty, opts.Result, width, opts.ExpandedContent)
 	case ToolStatusCanceled:
 		msg = sty.Tool.StateCancelled.Render("Canceled.")
 	case ToolStatusAwaitingPermission:
@@ -542,21 +547,42 @@ func toolEarlyStateContent(sty *styles.Styles, opts *ToolRenderOpts, width int) 
 }
 
 // toolErrorContent formats an error message with an ERROR or WARN tag.
-func toolErrorContent(sty *styles.Styles, result *message.ToolResult, width int) string {
+//
+// When collapsed it shows a single truncated line plus a hidden-line
+// notice; when expanded it renders the full message wrapped to width,
+// preserving newlines, so multi-line failures (stack traces, compiler
+// output, edit-failure messages) stay actionable. This mirrors the
+// assistant-level error renderer's wrapped Details.
+func toolErrorContent(sty *styles.Styles, result *message.ToolResult, width int, expanded bool) string {
 	if result == nil {
 		return ""
 	}
-	errContent := strings.ReplaceAll(result.Content, "\n", " ")
-	if strings.Contains(errContent, "User denied permission") {
-		deniedTag := sty.Tool.WarnTag.Render("WARN")
-		deniedTagWidth := lipgloss.Width(deniedTag)
-		errContent = ansi.Truncate(errContent, width-deniedTagWidth-3, "…")
-		return fmt.Sprintf("%s %s", deniedTag, sty.Tool.WarnMessage.Render(errContent))
+	content := strings.TrimRight(result.Content, "\n")
+
+	tag := sty.Tool.ErrorTag.Render("ERROR")
+	msgStyle := sty.Tool.ErrorMessage
+	if strings.Contains(content, "User denied permission") {
+		tag = sty.Tool.WarnTag.Render("WARN")
+		msgStyle = sty.Tool.WarnMessage
 	}
-	errTag := sty.Tool.ErrorTag.Render("ERROR")
-	tagWidth := lipgloss.Width(errTag)
-	errContent = ansi.Truncate(errContent, width-tagWidth-3, "…")
-	return fmt.Sprintf("%s %s", errTag, sty.Tool.ErrorMessage.Render(errContent))
+	tagWidth := lipgloss.Width(tag)
+	msgWidth := max(1, width-tagWidth-1)
+
+	if !expanded {
+		oneLine := ansi.Truncate(strings.ReplaceAll(content, "\n", " "), msgWidth, "…")
+		out := fmt.Sprintf("%s %s", tag, msgStyle.Render(oneLine))
+		if hidden := strings.Count(content, "\n"); hidden > 0 {
+			out += "\n" + sty.Tool.ContentTruncation.
+				Width(width).
+				Render(fmt.Sprintf(assistantMessageTruncateFormat, hidden))
+		}
+		return out
+	}
+
+	// Expanded: wrap the full message to width, preserving newlines,
+	// and align continuation lines under the message column.
+	wrapped := msgStyle.Width(msgWidth).Render(content)
+	return lipgloss.JoinHorizontal(lipgloss.Top, tag+" ", wrapped)
 }
 
 // toolIcon returns the status icon for a tool call.
@@ -968,7 +994,7 @@ func toolOutputDiffContent(sty *styles.Styles, file, oldContent, newContent stri
 	lines := strings.Split(formatted, "\n")
 
 	// Truncate if needed.
-	maxLines := responseContextHeight
+	maxLines := diffContextHeight
 	if expanded {
 		maxLines = len(lines)
 	}
@@ -1018,7 +1044,7 @@ func toolOutputMultiEditDiffContent(sty *styles.Styles, file string, meta tools.
 	lines := strings.Split(formatted, "\n")
 
 	// Truncate if needed.
-	maxLines := responseContextHeight
+	maxLines := diffContextHeight
 	if expanded {
 		maxLines = len(lines)
 	}
@@ -1027,7 +1053,7 @@ func toolOutputMultiEditDiffContent(sty *styles.Styles, file string, meta tools.
 		truncMsg := sty.Tool.DiffTruncation.
 			Width(bodyWidth).
 			Render(fmt.Sprintf(assistantMessageTruncateFormat, len(lines)-maxLines))
-		formatted = truncMsg + "\n" + strings.Join(lines[:maxLines], "\n")
+		formatted = strings.Join(lines[:maxLines], "\n") + "\n" + truncMsg
 	}
 
 	// Add failed edits note if any exist.
@@ -1661,7 +1687,7 @@ func prettifyToolName(name string) string {
 	case tools.AgenticFetchToolName:
 		return "Agentic Fetch"
 	case tools.WebFetchToolName:
-		return "Fetch"
+		return "Web Fetch"
 	case tools.WebSearchToolName:
 		return "Search"
 	case tools.GlobToolName:

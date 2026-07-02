@@ -110,6 +110,8 @@ func NewModels(com *common.Common, isOnboarding bool) (*Models, error) {
 	m.list = NewModelsList(t)
 	m.list.Focus()
 	m.list.SetSelected(0)
+	m.list.SetEmptyMessage("No models")
+	m.list.SetFilterEmptyMessage("No matches")
 
 	m.input = textinput.New()
 	m.input.SetVirtualCursor(false)

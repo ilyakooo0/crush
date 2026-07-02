@@ -44,7 +44,7 @@ func (v *ViewToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *
 
 	var params tools.ViewParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
-		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
+		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth, false)
 	}
 
 	file := fsext.PrettyPath(params.FilePath)
@@ -130,7 +130,7 @@ func (w *WriteToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 
 	var params tools.WriteParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
-		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
+		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth, false)
 	}
 
 	file := fsext.PrettyPath(params.FilePath)
@@ -150,11 +150,11 @@ func (w *WriteToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	if opts.Result.IsError {
 		var meta tools.WriteResponseMetadata
 		if err := json.Unmarshal([]byte(opts.Result.Metadata), &meta); err == nil && meta.Diff != "" {
-			errLine := toolErrorContent(sty, opts.Result, cappedWidth)
+			errLine := toolErrorContent(sty, opts.Result, cappedWidth, opts.ExpandedContent)
 			diff := toolOutputDiffContentFromUnified(sty, meta.Diff, cappedWidth, opts.ExpandedContent)
 			return strings.Join([]string{header, "", errLine, "", diff}, "\n")
 		}
-		return joinToolParts(header, toolErrorContent(sty, opts.Result, cappedWidth))
+		return joinToolParts(header, toolErrorContent(sty, opts.Result, cappedWidth, opts.ExpandedContent))
 	}
 
 	// Render code content with syntax highlighting.
@@ -199,7 +199,7 @@ func (e *EditToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *
 
 	var params tools.EditParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
-		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, width)
+		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, width, false)
 	}
 
 	file := fsext.PrettyPath(params.FilePath)
@@ -227,7 +227,7 @@ func (e *EditToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *
 
 	// On error (e.g. denied permission), show error above the diff.
 	if opts.Result.IsError {
-		errLine := toolErrorContent(sty, opts.Result, width)
+		errLine := toolErrorContent(sty, opts.Result, width, opts.ExpandedContent)
 		return strings.Join([]string{header, "", errLine, "", diff}, "\n")
 	}
 
@@ -267,7 +267,7 @@ func (m *MultiEditToolRenderContext) RenderTool(sty *styles.Styles, width int, o
 
 	var params tools.MultiEditParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
-		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, width)
+		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, width, false)
 	}
 
 	file := fsext.PrettyPath(params.FilePath)
@@ -301,7 +301,7 @@ func (m *MultiEditToolRenderContext) RenderTool(sty *styles.Styles, width int, o
 
 	// On error (e.g. denied permission), show error above the diff.
 	if opts.Result.IsError {
-		errLine := toolErrorContent(sty, opts.Result, width)
+		errLine := toolErrorContent(sty, opts.Result, width, opts.ExpandedContent)
 		return strings.Join([]string{header, "", errLine, "", diff}, "\n")
 	}
 
@@ -341,7 +341,7 @@ func (d *DownloadToolRenderContext) RenderTool(sty *styles.Styles, width int, op
 
 	var params tools.DownloadParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
-		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
+		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth, false)
 	}
 
 	toolParams := []string{params.URL}

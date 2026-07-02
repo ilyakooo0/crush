@@ -124,13 +124,13 @@ func (c *CommandItem) Render(width int) string {
 			descStyle = c.t.Dialog.SelectedItem
 		}
 		contentWidth := max(0, width-descStyle.GetHorizontalFrameSize()+1)
-		description := ansi.Truncate(strings.TrimSpace(c.description), contentWidth, "...")
+		// Indent the description to align with the marker/title text.
+		indent := strings.Repeat(" ", listItemMarkerWidth)
+		textWidth := max(0, contentWidth-listItemMarkerWidth)
+		description := ansi.Truncate(strings.TrimSpace(c.description), textWidth, "…")
 		descVisWidth := lipgloss.Width(description)
-		gap := strings.Repeat(" ", max(0, contentWidth-descVisWidth))
-		if description == "" {
-			description = " "
-		}
-		rendered = lipgloss.JoinVertical(lipgloss.Left, rendered, descStyle.Render(description+gap))
+		gap := strings.Repeat(" ", max(0, textWidth-descVisWidth))
+		rendered = lipgloss.JoinVertical(lipgloss.Left, rendered, descStyle.Render(indent+description+gap))
 	}
 	return rendered
 }

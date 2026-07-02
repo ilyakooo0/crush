@@ -14,10 +14,12 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/home"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	fimage "github.com/charmbracelet/crush/internal/ui/image"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // FilePickerID is the identifier for the FilePicker dialog.
@@ -69,7 +71,7 @@ func NewFilePicker(com *common.Common) (*FilePicker, tea.Cmd) {
 
 	f.km.Select = key.NewBinding(
 		key.WithKeys("enter"),
-		key.WithHelp("enter", "accept"),
+		key.WithHelp("enter", "confirm"),
 	)
 	f.km.Down = key.NewBinding(
 		key.WithKeys("down", "j"),
@@ -93,7 +95,7 @@ func NewFilePicker(com *common.Common) (*FilePicker, tea.Cmd) {
 	)
 	f.km.Close = key.NewBinding(
 		key.WithKeys("esc", "alt+esc"),
-		key.WithHelp("esc", "close/exit"),
+		key.WithHelp("esc", "cancel"),
 	)
 
 	fp := filepicker.New()
@@ -241,7 +243,14 @@ func (f *FilePicker) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	rc := NewRenderContext(t, width)
 	rc.Gap = 1
 	rc.Title = "Add Image"
+	// Make the image-only restriction visible instead of silently no-oping.
+	rc.TitleInfo = t.Dialog.SecondaryText.Render("  Images only: jpg, png")
 	rc.Help = f.help.View(f)
+
+	// Breadcrumb: show the (truncated) current directory so users know where
+	// they are while navigating.
+	currentDir := ansi.Truncate(fsext.PrettyPath(f.fp.CurrentDirectory), innerWidth, "…")
+	rc.AddPart(t.Dialog.SecondaryText.Render(currentDir))
 
 	imgPreview := t.Dialog.ImagePreview.Align(lipgloss.Center).Width(innerWidth).Render(f.imagePreview(imgPrevWidth, imgPrevHeight))
 	rc.AddPart(imgPreview)

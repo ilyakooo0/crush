@@ -221,8 +221,10 @@ type LSPConfig struct {
 type TUIOptions struct {
 	CompactMode bool   `json:"compact_mode,omitempty" jsonschema:"description=Enable compact mode for the TUI interface,default=false"`
 	DiffMode    string `json:"diff_mode,omitempty" jsonschema:"description=Diff mode for the TUI interface,enum=unified,enum=split"`
-	// Here we can add themes later or any TUI related options
-	//
+	// Theme selects the TUI color scheme. "auto" (the default) picks light
+	// or dark based on the detected terminal background; "dark"/"light"
+	// force a specific scheme.
+	Theme string `json:"theme,omitempty" jsonschema:"description=TUI color scheme,enum=auto,enum=dark,enum=light,default=auto"`
 
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`

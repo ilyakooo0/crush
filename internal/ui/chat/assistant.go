@@ -23,7 +23,7 @@ const assistantMessageTruncateFormat = "… (%d lines hidden) [click or space to
 // promote the view to a full expansion. The promotion is wired through
 // the existing ToggleExpanded path (click / space) — F5 deliberately
 // does not add a new keybinding.
-const assistantMessageTailWindowFormat = "… %d earlier lines hidden [click or space for full view]"
+const assistantMessageTailWindowFormat = "… (%d earlier lines hidden) [click or space to expand]"
 
 // maxCollapsedThinkingHeight defines the maximum height of the thinking
 const maxCollapsedThinkingHeight = 10

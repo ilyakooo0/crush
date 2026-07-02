@@ -98,6 +98,8 @@ func NewCommands(com *common.Common, sessionID string, hasSession, hasTodos, has
 	c.list = list.NewFilterableList()
 	c.list.Focus()
 	c.list.SetSelected(0)
+	c.list.SetEmptyMessage("No commands")
+	c.list.SetFilterEmptyMessage("No matches")
 
 	c.input = textinput.New()
 	c.input.SetVirtualCursor(false)

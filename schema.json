@@ -748,6 +748,16 @@
           ],
           "description": "Diff mode for the TUI interface"
         },
+        "theme": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "dark",
+            "light"
+          ],
+          "description": "TUI color scheme",
+          "default": "auto"
+        },
         "completions": {
           "$ref": "#/$defs/Completions",
           "description": "Completions UI options"

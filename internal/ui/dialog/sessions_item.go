@@ -140,6 +140,14 @@ type ListItemStyles struct {
 	InfoTextFocused lipgloss.Style
 }
 
+// listItemMarker is a leading glyph prepended to the focused list row so
+// selection is conveyed by shape (not background color alone). Non-focused
+// rows are padded with equivalent leading spaces to keep text aligned.
+const (
+	listItemMarker      = "▍ "
+	listItemMarkerWidth = 2
+)
+
 func renderItem(t ListItemStyles, title string, info string, focused bool, width int, cache map[int]string, m *fuzzy.Match) string {
 	if cache == nil {
 		cache = make(map[int]string)
@@ -151,13 +159,15 @@ func renderItem(t ListItemStyles, title string, info string, focused bool, width
 	}
 
 	style := t.ItemBlurred
+	marker := strings.Repeat(" ", listItemMarkerWidth)
 	if focused {
 		style = t.ItemFocused
+		marker = listItemMarker
 	}
 
 	var infoText string
 	var infoWidth int
-	lineWidth := width
+	lineWidth := max(0, width-listItemMarkerWidth)
 	if len(info) > 0 {
 		infoText = fmt.Sprintf(" %s ", info)
 		if focused {
@@ -202,7 +212,7 @@ func renderItem(t ListItemStyles, title string, info string, focused bool, width
 		content = strings.Join(parts, "")
 	}
 
-	content = style.Render(content + gap + infoText)
+	content = style.Render(marker + content + gap + infoText)
 	cache[width] = content
 	return content
 }

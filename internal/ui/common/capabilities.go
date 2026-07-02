@@ -1,7 +1,6 @@
 package common
 
 import (
-	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -29,8 +28,6 @@ type Capabilities struct {
 	// KittyGraphics indicates whether the terminal supports the Kitty graphics
 	// protocol.
 	KittyGraphics bool
-	// SixelGraphics indicates whether the terminal supports Sixel graphics.
-	SixelGraphics bool
 	// Env is the terminal environment variables.
 	Env uv.Environ
 	// TerminalVersion is the terminal version string.
@@ -56,10 +53,6 @@ func (c *Capabilities) Update(msg any) {
 		c.PixelY = m.Height
 	case uv.KittyGraphicsEvent:
 		c.KittyGraphics = true
-	case uv.PrimaryDeviceAttributesEvent:
-		if slices.Contains(m, 4) {
-			c.SixelGraphics = true
-		}
 	case tea.TerminalVersionMsg:
 		c.TerminalVersion = m.Name
 	case tea.ModeReportMsg:
@@ -106,11 +99,6 @@ func (c Capabilities) SupportsTrueColor() bool {
 // SupportsKittyGraphics returns true if the terminal supports Kitty graphics.
 func (c Capabilities) SupportsKittyGraphics() bool {
 	return c.KittyGraphics
-}
-
-// SupportsSixelGraphics returns true if the terminal supports Sixel graphics.
-func (c Capabilities) SupportsSixelGraphics() bool {
-	return c.SixelGraphics
 }
 
 // CellSize returns the size of a single terminal cell in pixels.

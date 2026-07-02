@@ -2,6 +2,8 @@ package list
 
 import (
 	"strings"
+
+	"charm.land/lipgloss/v2"
 )
 
 // List represents a list of items that can be lazily rendered. A list is
@@ -49,6 +51,11 @@ type List struct {
 	// rendered, subsequent draws return the stored output verbatim
 	// without calling back into Render.
 	cache map[Item]*listCacheEntry
+
+	// emptyMessage is a placeholder rendered centered (and dimmed) when
+	// the list has zero items, so an empty or fully-filtered list is not
+	// shown as a blank void. Empty by default (renders nothing).
+	emptyMessage string
 
 	// freezeSuppressed marks items the list must not freeze on the
 	// next render even when their Finished() reports true. This is
@@ -107,6 +114,12 @@ func (l *List) SetSize(width, height int) {
 	}
 	l.width = width
 	l.height = height
+}
+
+// SetEmptyMessage sets a placeholder message rendered centered and dimmed
+// when the list has no items. An empty string disables the placeholder.
+func (l *List) SetEmptyMessage(msg string) {
+	l.emptyMessage = msg
 }
 
 // SetGap sets the gap between items.
@@ -516,7 +529,15 @@ func (l *List) VisibleItemIndices() (startIdx, endIdx int) {
 // lines we now drop implicitly per item).
 func (l *List) Render() string {
 	if len(l.items) == 0 {
-		return ""
+		if l.emptyMessage == "" {
+			return ""
+		}
+		msg := lipgloss.NewStyle().Faint(true).Render(l.emptyMessage)
+		return lipgloss.Place(
+			max(l.width, 0), max(l.height, 0),
+			lipgloss.Center, lipgloss.Center,
+			msg,
+		)
 	}
 
 	budget := max(l.height, 0)

@@ -199,8 +199,14 @@ type UI struct {
 
 	// themeKey identifies the currently applied theme so applyTheme can
 	// skip the expensive style rebuild when switching to a provider that
-	// resolves to the same theme.
+	// resolves to the same theme. It encodes both the provider theme family
+	// and the light/dark background mode.
 	themeKey string
+
+	// dark tracks the most recently detected terminal background mode (from
+	// tea.BackgroundColorMsg). It defaults to true and is only consulted
+	// when the configured theme is "auto"; see effectiveDark.
+	dark bool
 
 	focus uiFocusState
 	state uiState
@@ -213,6 +219,12 @@ type UI struct {
 
 	// isCanceling tracks whether the user has pressed escape once to cancel.
 	isCanceling bool
+
+	// lastError holds the full text of the most recent error/warning status
+	// message. Error/warning notifications are truncated to a single line in
+	// the status bar and are not auto-expired; this retains the untruncated
+	// text so it can be copied to the clipboard (keyMap.CopyError).
+	lastError string
 
 	// bangMode tracks whether the editor is in bang (!) shell mode.
 	bangMode     bool
@@ -421,8 +433,16 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 
 	// Seed the active theme key from the large model provider so the
 	// first model selection can correctly skip a redundant theme swap.
+	// DefaultCommon builds the dark theme at startup, so the mode is seeded
+	// dark; a tea.BackgroundColorMsg (or a forced "light" config) reconciles
+	// it to the light palette on the first frame.
+	ui.dark = true
 	if cfg := com.Config(); cfg != nil {
-		ui.themeKey = styles.ThemeKeyForProvider(cfg.Models[config.SelectedModelTypeLarge].Provider)
+		// Seed with the dark key because DefaultCommon builds the dark theme;
+		// reconcileTheme applies the light palette on the first frame when
+		// the terminal reports a light background or "light" is forced.
+		ui.themeKey = styles.ThemeKeyForProviderMode(
+			cfg.Models[config.SelectedModelTypeLarge].Provider, true)
 	}
 
 	ui.setEditorPrompt(com.Workspace.PermissionSkipRequests())
@@ -460,6 +480,9 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 // Init initializes the UI model.
 func (m *UI) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	// Ask the terminal for its background color so we can pick the light or
+	// dark palette (see the tea.BackgroundColorMsg handler in Update).
+	cmds = append(cmds, tea.RequestBackgroundColor)
 	if m.state == uiOnboarding {
 		if cmd := m.openModelsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -826,7 +849,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		if cmd := m.sendNotification(notification.Notification{
-			Title:   "Crush is waiting...",
+			Title:   "Crush needs permission",
 			Message: fmt.Sprintf("Permission required to execute \"%s\"", msg.Payload.ToolName),
 		}); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -842,9 +865,17 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sendProgressBar = xstrings.ContainsAnyOf(termVersion, "ghostty", "iterm2", "rio")
 		}
 		return m, nil
+	case tea.BackgroundColorMsg:
+		// The terminal reported its background color; switch to the light
+		// or dark palette to match (unless the theme is forced via config).
+		m.dark = msg.IsDark()
+		m.reconcileTheme()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.updateLayoutAndSize()
+		// Fallback for terminals that never answer the background-color
+		// query: a forced "light"/"dark" config still takes effect here.
+		m.reconcileTheme()
 		if m.state == uiChat && m.chat.Follow() {
 			if cmd := m.chat.ScrollToBottomAndAnimate(); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -1088,11 +1119,18 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			slog.Error("Error reported", "error", msg.Msg)
 		}
 		m.status.SetInfoMsg(msg)
-		ttl := msg.TTL
-		if ttl <= 0 {
-			ttl = DefaultStatusTTL
+		// Errors and warnings persist until replaced or dismissed (rather than
+		// auto-expiring like info/success/update) so the user can read them and
+		// copy the full text (ctrl+e). Retain the untruncated message for that.
+		if msg.Type == util.InfoTypeError || msg.Type == util.InfoTypeWarn {
+			m.lastError = msg.Msg
+		} else {
+			ttl := msg.TTL
+			if ttl <= 0 {
+				ttl = DefaultStatusTTL
+			}
+			cmds = append(cmds, clearInfoMsgCmd(ttl))
 		}
-		cmds = append(cmds, clearInfoMsgCmd(ttl))
 	case app.UpdateAvailableMsg:
 		text := fmt.Sprintf("Crush update available: v%s → v%s.", msg.CurrentVersion, msg.LatestVersion)
 		if msg.IsDevelopment {
@@ -2063,6 +2101,12 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			cmds = append(cmds, util.ReportInfo("Yolo mode "+status))
 			return true
+		case key.Matches(msg, m.keyMap.CopyError):
+			if m.lastError == "" {
+				return false
+			}
+			cmds = append(cmds, common.CopyToClipboard(m.lastError, "Error copied to clipboard"))
+			return true
 		}
 		return false
 	}
@@ -2674,6 +2718,9 @@ func (m *UI) ShortHelp() []key.Binding {
 				binds,
 				k.Editor.Newline,
 			)
+			if m.textarea.Value() == "" {
+				binds = append(binds, k.Editor.ShellCommand)
+			}
 		case uiFocusMain:
 			binds = append(
 				binds,
@@ -2697,6 +2744,10 @@ func (m *UI) ShortHelp() []key.Binding {
 			k.Models,
 			k.Editor.Newline,
 		)
+	}
+
+	if m.lastError != "" {
+		binds = append(binds, k.CopyError)
 	}
 
 	binds = append(
@@ -2771,6 +2822,9 @@ func (m *UI) FullHelp() [][]key.Binding {
 			if m.currentModelSupportsImages() {
 				editorBinds = append(editorBinds, k.Editor.AddImage, k.Editor.PasteImage)
 			}
+			if m.textarea.Value() == "" {
+				editorBinds = append(editorBinds, k.Editor.ShellCommand)
+			}
 			binds = append(binds, editorBinds)
 			if hasAttachments {
 				binds = append(
@@ -2826,6 +2880,9 @@ func (m *UI) FullHelp() [][]key.Binding {
 			if m.currentModelSupportsImages() {
 				editorBinds = append(editorBinds, k.Editor.AddImage, k.Editor.PasteImage)
 			}
+			if m.textarea.Value() == "" {
+				editorBinds = append(editorBinds, k.Editor.ShellCommand)
+			}
 			binds = append(binds, editorBinds)
 			if hasAttachments {
 				binds = append(
@@ -2840,13 +2897,11 @@ func (m *UI) FullHelp() [][]key.Binding {
 		}
 	}
 
-	binds = append(
-		binds,
-		[]key.Binding{
-			help,
-			k.Quit,
-		},
-	)
+	lastRow := []key.Binding{help, k.Quit}
+	if m.lastError != "" {
+		lastRow = append([]key.Binding{k.CopyError}, lastRow...)
+	}
+	binds = append(binds, lastRow)
 
 	return binds
 }
@@ -3497,12 +3552,40 @@ func (m *UI) cacheSidebarLogo(width int) {
 // invalidating the markdown renderer cache and re-rendering the entire
 // transcript for no visible change.
 func (m *UI) applyThemeForProvider(providerID string) {
-	key := styles.ThemeKeyForProvider(providerID)
+	dark := m.effectiveDark()
+	key := styles.ThemeKeyForProviderMode(providerID, dark)
 	if key == m.themeKey {
 		return
 	}
 	m.themeKey = key
-	m.applyTheme(styles.ThemeForProvider(providerID))
+	m.applyTheme(styles.ThemeForProviderMode(providerID, dark))
+}
+
+// effectiveDark reports whether the dark palette should be used. A "dark"
+// or "light" theme setting forces the mode; "auto" (the default) follows
+// the detected terminal background (m.dark).
+func (m *UI) effectiveDark() bool {
+	if cfg := m.com.Config(); cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil {
+		switch cfg.Options.TUI.Theme {
+		case "light":
+			return false
+		case "dark":
+			return true
+		}
+	}
+	return m.dark
+}
+
+// reconcileTheme re-selects the active theme for the current large-model
+// provider and background mode, applying it only when it differs from the
+// theme already in effect. It is safe to call on every background-color or
+// window-size event.
+func (m *UI) reconcileTheme() {
+	providerID := ""
+	if cfg := m.com.Config(); cfg != nil {
+		providerID = cfg.Models[config.SelectedModelTypeLarge].Provider
+	}
+	m.applyThemeForProvider(providerID)
 }
 
 // applyTheme replaces the active styles with the given theme, drops the
@@ -3962,8 +4045,8 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 	case notify.TypeAgentFinished:
 		var cmds []tea.Cmd
 		cmds = append(cmds, m.sendNotification(notification.Notification{
-			Title:   "Crush is waiting...",
-			Message: fmt.Sprintf("Agent's turn completed in \"%s\"", n.SessionTitle),
+			Title:   "Crush finished",
+			Message: fmt.Sprintf("Turn complete — %s", n.SessionTitle),
 		}))
 		if m.com.IsHyper() {
 			cmds = append(cmds, m.fetchHyperCredits())

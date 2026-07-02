@@ -54,22 +54,23 @@ func TestPermissions_NavigationCyclesOptions(t *testing.T) {
 	t.Parallel()
 
 	p := newTestPermissions(t)
+	// The dialog defaults to Deny (index 2) so enter does not grant the most
+	// permissive choice.
+	require.Equal(t, 2, p.selectedOption)
+
+	// Tab cycles forward (wraps to 0).
+	p.HandleMsg(tea.KeyPressMsg{Code: tea.KeyTab})
 	require.Equal(t, 0, p.selectedOption)
 
-	// Tab cycles forward.
 	p.HandleMsg(tea.KeyPressMsg{Code: tea.KeyTab})
 	require.Equal(t, 1, p.selectedOption)
 
 	p.HandleMsg(tea.KeyPressMsg{Code: tea.KeyTab})
 	require.Equal(t, 2, p.selectedOption)
 
-	// Wrap around.
-	p.HandleMsg(tea.KeyPressMsg{Code: tea.KeyTab})
-	require.Equal(t, 0, p.selectedOption)
-
 	// Left cycles backward.
 	p.HandleMsg(keyMsg('h'))
-	require.Equal(t, 2, p.selectedOption)
+	require.Equal(t, 1, p.selectedOption)
 }
 
 // TestPermissions_EnterConfirmsSelection verifies that enter confirms the

@@ -26,6 +26,11 @@ type FilterableList struct {
 	// dirty tracks whether the filtered set needs to be recomputed. It is set
 	// by any mutation of items or query and cleared after Render recomputes.
 	dirty bool
+
+	// emptyMessage is shown when there are no items and no active filter.
+	emptyMessage string
+	// filterEmptyMessage is shown when a filter is active but matches nothing.
+	filterEmptyMessage string
 }
 
 // NewFilterableList creates a new filterable list.
@@ -125,11 +130,28 @@ func (f *FilterableList) FilteredItems() []Item {
 	return matchedItems
 }
 
+// SetEmptyMessage sets the placeholder shown when the list has no items and
+// no filter is active.
+func (f *FilterableList) SetEmptyMessage(msg string) {
+	f.emptyMessage = msg
+}
+
+// SetFilterEmptyMessage sets the placeholder shown when a filter is active but
+// yields no matches.
+func (f *FilterableList) SetFilterEmptyMessage(msg string) {
+	f.filterEmptyMessage = msg
+}
+
 // Render renders the filterable list.
 func (f *FilterableList) Render() string {
 	if f.dirty {
 		f.List.SetItems(f.FilteredItems()...)
 		f.dirty = false
+	}
+	if f.query != "" && f.filterEmptyMessage != "" {
+		f.List.SetEmptyMessage(f.filterEmptyMessage)
+	} else {
+		f.List.SetEmptyMessage(f.emptyMessage)
 	}
 	return f.List.Render()
 }

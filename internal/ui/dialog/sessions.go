@@ -81,6 +81,8 @@ func NewSessions(com *common.Common, selectedSessionID string) (*Session, error)
 	s.list = list.NewFilterableList(sessionItems(com.Styles, sessionsModeNormal, sessions...)...)
 	s.list.Focus()
 	s.list.SetSelected(s.selectedSessionInx)
+	s.list.SetEmptyMessage("No sessions yet")
+	s.list.SetFilterEmptyMessage("No matches")
 
 	s.input = textinput.New()
 	s.input.SetVirtualCursor(false)
@@ -89,8 +91,8 @@ func NewSessions(com *common.Common, selectedSessionID string) (*Session, error)
 	s.input.Focus()
 
 	s.keyMap.Select = key.NewBinding(
-		key.WithKeys("enter", "tab", "ctrl+y"),
-		key.WithHelp("enter", "choose"),
+		key.WithKeys("enter", "ctrl+y"),
+		key.WithHelp("enter", "confirm"),
 	)
 	s.keyMap.Next = key.NewBinding(
 		key.WithKeys("down", "ctrl+n"),
@@ -121,7 +123,7 @@ func NewSessions(com *common.Common, selectedSessionID string) (*Session, error)
 		key.WithHelp("esc", "cancel"),
 	)
 	s.keyMap.ConfirmDelete = key.NewBinding(
-		key.WithKeys("y"),
+		key.WithKeys("y", "enter"),
 		key.WithHelp("y", "delete"),
 	)
 	s.keyMap.CancelDelete = key.NewBinding(

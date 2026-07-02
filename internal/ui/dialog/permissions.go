@@ -135,7 +135,7 @@ func defaultPermissionsKeyMap() permissionsKeyMap {
 			key.WithKeys("d", "D"),
 			key.WithHelp("d", "deny"),
 		),
-		Close: CloseKey,
+		Close: denyCloseKey(),
 		ToggleDiffMode: key.NewBinding(
 			key.WithKeys("t"),
 			key.WithHelp("t", "toggle diff view"),
@@ -169,6 +169,15 @@ func defaultPermissionsKeyMap() permissionsKeyMap {
 			key.WithHelp("shift+←↓↑→", "scroll"),
 		),
 	}
+}
+
+// denyCloseKey returns the close binding for the permissions dialog. It
+// mirrors [CloseKey] but its help label reads "deny" because pressing esc
+// rejects the permission request rather than merely dismissing the dialog.
+func denyCloseKey() key.Binding {
+	k := CloseKey
+	k.SetHelp("esc", "deny")
+	return k
 }
 
 var _ Dialog = (*Permissions)(nil)
@@ -205,9 +214,11 @@ func NewPermissions(com *common.Common, perm permission.PermissionRequest, opts 
 	}
 
 	p := &Permissions{
-		com:            com,
-		permission:     perm,
-		selectedOption: 0,
+		com:        com,
+		permission: perm,
+		// Default to Deny (index 2) so that confirming with enter does not
+		// grant the most permissive choice. See renderButtons for ordering.
+		selectedOption: 2,
 		viewport:       vp,
 		help:           h,
 		keyMap:         km,
@@ -446,7 +457,11 @@ func (p *Permissions) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	if content != "" {
 		parts = append(parts, "", content)
 	}
-	parts = append(parts, "", buttons, "", helpView)
+	parts = append(parts, "", buttons)
+	if hint := p.renderButtonHint(contentWidth); hint != "" {
+		parts = append(parts, hint)
+	}
+	parts = append(parts, "", helpView)
 
 	innerContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	DrawCenterCursor(scr, area, dialogStyle.Render(innerContent), nil)
@@ -788,6 +803,24 @@ func (p *Permissions) renderButtons(contentWidth int) string {
 		Width(contentWidth).
 		Align(lipgloss.Right).
 		Render(content)
+}
+
+// renderButtonHint renders a dim one-line description of the currently
+// highlighted button so the consequence of the selection is explicit.
+func (p *Permissions) renderButtonHint(contentWidth int) string {
+	var msg string
+	switch p.selectedOption {
+	case 0:
+		msg = "Allow this action once"
+	case 1:
+		msg = "Auto-allow this tool for the rest of the session"
+	default:
+		msg = "Reject and tell the agent"
+	}
+	return p.com.Styles.Dialog.SecondaryText.
+		Width(contentWidth).
+		Align(lipgloss.Right).
+		Render(msg)
 }
 
 func (p *Permissions) canScroll() bool {

@@ -25,7 +25,7 @@ const (
 // CloseKey is the default key binding to close dialogs.
 var CloseKey = key.NewBinding(
 	key.WithKeys("esc", "alt+esc"),
-	key.WithHelp("esc", "exit"),
+	key.WithHelp("esc", "cancel"),
 )
 
 // Action represents an action taken in a dialog after handling a message.

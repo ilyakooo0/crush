@@ -102,6 +102,9 @@ type (
 type (
 	ActionChangeAPIKeyState struct {
 		State APIKeyInputState
+		// Reason is an optional human-readable explanation, set when
+		// transitioning to APIKeyInputStateError.
+		Reason string
 	}
 )
 

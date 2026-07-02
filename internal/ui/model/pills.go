@@ -88,7 +88,7 @@ func todoPill(todos []session.Todo, spinnerView string, focused, panelFocused bo
 
 	total := len(todos)
 
-	label := t.Pills.TodoLabel.Render("To-Do")
+	label := t.Pills.TodoLabel.Render("Tasks")
 	progress := t.Pills.TodoProgress.Render(fmt.Sprintf("%d/%d", completed, total))
 
 	var content string

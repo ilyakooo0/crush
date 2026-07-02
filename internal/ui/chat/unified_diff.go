@@ -157,7 +157,7 @@ func toolOutputDiffContentFromUnified(sty *styles.Styles, content string, width 
 	}
 	combined := strings.Join(blocks, "\n")
 	lines := strings.Split(combined, "\n")
-	maxLines := responseContextHeight
+	maxLines := diffContextHeight
 	if expanded {
 		maxLines = len(lines)
 	}

@@ -25,9 +25,10 @@ const (
 
 	ArrowRightIcon string = "→"
 
-	ToolPending string = "●"
-	ToolSuccess string = "✓"
-	ToolError   string = "×"
+	ToolPending   string = "●"
+	ToolSuccess   string = "✓"
+	ToolError     string = "×"
+	ToolCancelled string = "⊘"
 
 	RadioOn  string = "◉"
 	RadioOff string = "○"

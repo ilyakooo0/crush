@@ -550,26 +550,12 @@ func quickStyle(o quickStyleOpts) Styles {
 				Foreground(o.fgMoreSubtle).
 				Background(o.bgBase),
 		},
-		InsertLine: diffview.LineStyle{
-			LineNumber: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#629657")).
-				Background(lipgloss.Color("#2b322a")),
-			Symbol: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#629657")).
-				Background(lipgloss.Color("#323931")),
-			Code: lipgloss.NewStyle().
-				Background(lipgloss.Color("#323931")),
-		},
-		DeleteLine: diffview.LineStyle{
-			LineNumber: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#a45c59")).
-				Background(lipgloss.Color("#312929")),
-			Symbol: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#a45c59")).
-				Background(lipgloss.Color("#383030")),
-			Code: lipgloss.NewStyle().
-				Background(lipgloss.Color("#383030")),
-		},
+		// Insert/delete colors are derived from the semantic palette (green
+		// for inserts, red for deletes) washed over the base background, so a
+		// future light theme adapts without hardcoded hex. Code foreground is
+		// left unset to inherit the syntax highlighting.
+		InsertLine: diffview.ChangeLineStyle(o.success, o.bgBase, nil),
+		DeleteLine: diffview.ChangeLineStyle(o.error, o.bgBase, nil),
 		Filename: diffview.LineStyle{
 			LineNumber: lipgloss.NewStyle().
 				Foreground(o.fgSubtle).
@@ -618,7 +604,7 @@ func quickStyle(o quickStyleOpts) Styles {
 	s.Tool.IconPending = base.Foreground(o.successMostSubtle).SetString(ToolPending)
 	s.Tool.IconSuccess = base.Foreground(o.success).SetString(ToolSuccess)
 	s.Tool.IconError = base.Foreground(o.error).SetString(ToolError)
-	s.Tool.IconCancelled = muted.SetString(ToolPending)
+	s.Tool.IconCancelled = muted.SetString(ToolCancelled)
 
 	s.Tool.NameNormal = base.Foreground(o.info)
 	s.Tool.NameNested = base.Foreground(o.info)
