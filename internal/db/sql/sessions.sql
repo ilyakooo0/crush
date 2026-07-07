@@ -52,7 +52,7 @@ SET
 WHERE id = ?
 RETURNING *;
 
--- name: UpdateSessionTitleAndUsage :exec
+-- name: UpdateSessionTitleAndUsage :one
 UPDATE sessions
 SET
     title = ?,
@@ -60,14 +60,16 @@ SET
     completion_tokens = completion_tokens + ?,
     cost = cost + ?,
     updated_at = strftime('%s', 'now')
-WHERE id = ?;
+WHERE id = ?
+RETURNING *;
 
 
--- name: RenameSession :exec
+-- name: RenameSession :one
 UPDATE sessions
 SET
     title = ?
-WHERE id = ?;
+WHERE id = ?
+RETURNING *;
 
 -- name: DeleteSession :exec
 DELETE FROM sessions

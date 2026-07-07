@@ -145,18 +145,18 @@ func TestHasRepeatedToolCalls(t *testing.T) {
 func TestGetToolInteractionSignature(t *testing.T) {
 	t.Run("empty content returns empty string", func(t *testing.T) {
 		sig := getToolInteractionSignature(fantasy.ResponseContent{})
-		if sig != "" {
-			t.Errorf("expected empty string, got %q", sig)
+		if sig != 0 {
+			t.Errorf("expected zero signature, got %d", sig)
 		}
 	})
 
-	t.Run("text only content returns empty string", func(t *testing.T) {
+	t.Run("text only content returns zero signature", func(t *testing.T) {
 		content := fantasy.ResponseContent{
 			fantasy.TextContent{Text: "hello"},
 		}
 		sig := getToolInteractionSignature(content)
-		if sig != "" {
-			t.Errorf("expected empty string, got %q", sig)
+		if sig != 0 {
+			t.Errorf("expected zero signature, got %d", sig)
 		}
 	})
 
@@ -166,8 +166,8 @@ func TestGetToolInteractionSignature(t *testing.T) {
 			fantasy.ToolResultContent{ToolCallID: "1", ToolName: "read", Result: fantasy.ToolResultOutputContentText{Text: "content"}},
 		}
 		sig := getToolInteractionSignature(content)
-		if sig == "" {
-			t.Error("expected non-empty signature")
+		if sig == 0 {
+			t.Error("expected non-zero signature")
 		}
 	})
 
@@ -183,7 +183,7 @@ func TestGetToolInteractionSignature(t *testing.T) {
 		sig1 := getToolInteractionSignature(content1)
 		sig2 := getToolInteractionSignature(content2)
 		if sig1 != sig2 {
-			t.Errorf("expected same signature for same interactions, got %q and %q", sig1, sig2)
+			t.Errorf("expected same signature for same interactions, got %d and %d", sig1, sig2)
 		}
 	})
 

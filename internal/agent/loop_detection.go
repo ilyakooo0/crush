@@ -1,8 +1,7 @@
 package agent
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"hash/fnv"
 	"io"
 
 	"charm.land/fantasy"
@@ -22,11 +21,11 @@ func hasRepeatedToolCalls(steps []fantasy.StepResult, windowSize, maxRepeats int
 	}
 
 	window := steps[len(steps)-windowSize:]
-	counts := make(map[string]int)
+	counts := make(map[uint64]int, windowSize)
 
 	for _, step := range window {
 		sig := getToolInteractionSignature(step.Content)
-		if sig == "" {
+		if sig == 0 {
 			continue
 		}
 		counts[sig]++
@@ -40,34 +39,35 @@ func hasRepeatedToolCalls(steps []fantasy.StepResult, windowSize, maxRepeats int
 
 // getToolInteractionSignature computes a hash signature for the tool
 // interactions in a single step's content. It pairs tool calls with their
-// results (matched by ToolCallID) and returns a hex-encoded SHA-256 hash.
-// If the step contains no tool calls, it returns "".
-func getToolInteractionSignature(content fantasy.ResponseContent) string {
+// results (matched by ToolCallID) and returns an FNV-1a hash. FNV is ~10x
+// faster than SHA-256 and collision risk is negligible for loop detection
+// over a 10-step window. If the step contains no tool calls, it returns 0.
+func getToolInteractionSignature(content fantasy.ResponseContent) uint64 {
 	toolCalls := content.ToolCalls()
 	if len(toolCalls) == 0 {
-		return ""
+		return 0
 	}
 
 	// Index tool results by their ToolCallID for fast lookup.
-	resultsByID := make(map[string]fantasy.ToolResultContent)
+	resultsByID := make(map[string]fantasy.ToolResultContent, len(toolCalls))
 	for _, tr := range content.ToolResults() {
 		resultsByID[tr.ToolCallID] = tr
 	}
 
-	h := sha256.New()
+	h := fnv.New64a()
 	for _, tc := range toolCalls {
 		output := ""
 		if tr, ok := resultsByID[tc.ToolCallID]; ok {
 			output = toolResultOutputString(tr.Result)
 		}
 		io.WriteString(h, tc.ToolName)
-		io.WriteString(h, "\x00")
+		h.Write([]byte{0})
 		io.WriteString(h, tc.Input)
-		io.WriteString(h, "\x00")
+		h.Write([]byte{0})
 		io.WriteString(h, output)
-		io.WriteString(h, "\x00")
+		h.Write([]byte{0})
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return h.Sum64()
 }
 
 // toolResultOutputString converts a ToolResultOutputContent to a stable string

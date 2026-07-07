@@ -349,7 +349,7 @@ func (a *sessionAgent) sessionMu(sessionID string) *sync.Mutex {
 func (a *sessionAgent) enqueueCall(call SessionAgentCall) {
 	existing, ok := a.messageQueue.Get(call.SessionID)
 	if !ok {
-		existing = []SessionAgentCall{}
+		existing = make([]SessionAgentCall, 0, 4)
 	}
 	queued := call
 	if call.Accepted != nil {
@@ -866,9 +866,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(promptPrefix)}, prepared.Messages...)
 			}
 
-			sessionLock.Lock()
-			stepMessages = cloneFantasyMessages(prepared.Messages)
-			sessionLock.Unlock()
+			// Save a reference to the prepared messages for token
+			// estimation in OnStepFinish. No clone needed here — the
+			// messages are not modified between PrepareStep and
+			// OnStepFinish (which run sequentially), and the clone is
+			// only needed when the provider returns zero usage.
+			stepMessages = prepared.Messages
 
 			var assistantMsg message.Message
 			assistantMsg, err = a.messages.Create(callContext, call.SessionID, message.CreateMessageParams{
@@ -1491,7 +1494,7 @@ func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentC
 }
 
 func (a *sessionAgent) preparePrompt(msgs []message.Message, supportsImages bool, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart) {
-	var history []fantasy.Message
+	history := make([]fantasy.Message, 0, len(msgs)+1)
 	if !a.isSubAgent {
 		history = append(history, fantasy.NewUserMessage(
 			fmt.Sprintf(
@@ -1591,7 +1594,7 @@ func filterOrphanedToolResults(m message.Message, knownToolCallIDs map[string]st
 	if len(aiMsgs) == 0 {
 		return fantasy.Message{}, false
 	}
-	var validParts []fantasy.MessagePart
+	validParts := make([]fantasy.MessagePart, 0, len(aiMsgs[0].Content))
 	for _, part := range aiMsgs[0].Content {
 		tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
 		if !ok {
@@ -1623,7 +1626,7 @@ func filterOrphanedToolResults(m message.Message, knownToolCallIDs map[string]st
 // conversation. Returns the message and true if any synthetic results were
 // produced.
 func syntheticToolResultsForOrphanedCalls(m message.Message, knownToolResultIDs map[string]struct{}) (fantasy.Message, bool) {
-	var syntheticParts []fantasy.MessagePart
+	syntheticParts := make([]fantasy.MessagePart, 0, len(m.ToolCalls()))
 	for _, tc := range m.ToolCalls() {
 		if _, hasResult := knownToolResultIDs[tc.ID]; hasResult {
 			continue

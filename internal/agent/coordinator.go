@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/fantasy"
@@ -22,6 +24,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/notify"
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
+	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/discover"
@@ -132,6 +135,24 @@ type coordinator struct {
 	// credential change misses the cache and rebuilds.
 	providerClients *csync.Map[string, fantasy.Provider]
 
+	// toolsCache avoids rebuilding the tool set on every UpdateModels call.
+	// The cache is invalidated when the config pointer changes (reload or
+	// mutation) or when mcpToolsGen is bumped (MCP server connect/disconnect
+	// or tools/list_changed notification).
+	toolsCacheMu  sync.Mutex
+	toolsCache    []fantasy.AgentTool
+	toolsCacheCfg *config.Config
+	toolsCacheMCP uint64
+	mcpToolsGen   atomic.Uint64
+
+	// providerOptsCache avoids repeating the 3× JSON marshal + merge +
+	// unmarshal in getProviderOptions on every turn when the model and
+	// config have not changed. Keyed by config pointer + model CatwalkCfg
+	// ID + provider name.
+	providerOptsCacheMu  sync.Mutex
+	providerOptsCache    fantasy.ProviderOptions
+	providerOptsCacheKey string
+
 	readyWg errgroup.Group
 }
 
@@ -196,6 +217,17 @@ func NewCoordinator(
 	}
 	c.currentAgent = agent
 	c.agents[config.AgentCoder] = agent
+
+	// Subscribe to MCP tool-list changes so the tools cache is invalidated
+	// when MCP servers connect/disconnect or announce new tools.
+	go func() {
+		for ev := range mcp.SubscribeEvents(ctx) {
+			if ev.Payload.Type == mcp.EventToolsListChanged || ev.Payload.Type == mcp.EventStateChanged {
+				c.mcpToolsGen.Add(1)
+			}
+		}
+	}()
+
 	return c, nil
 }
 
@@ -246,7 +278,7 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 		return nil, errModelProviderNotConfigured
 	}
 
-	mergedOptions, temp, topP, topK, freqPenalty, presPenalty := mergeCallOptions(model, providerCfg)
+	mergedOptions, temp, topP, topK, freqPenalty, presPenalty := c.cachedMergeCallOptions(model, providerCfg)
 
 	if err := c.refreshTokenIfExpired(ctx, providerCfg); err != nil {
 		// NOTE(@andreynering): We don't return here because the event handling to ask the user to reauthenticate
@@ -586,6 +618,39 @@ func mergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderO
 	freqPenalty := cmp.Or(model.ModelCfg.FrequencyPenalty, model.CatwalkCfg.Options.FrequencyPenalty)
 	presPenalty := cmp.Or(model.ModelCfg.PresencePenalty, model.CatwalkCfg.Options.PresencePenalty)
 	return modelOptions, temp, topP, topK, freqPenalty, presPenalty
+}
+
+// cachedMergeCallOptions wraps mergeCallOptions with a memoization cache.
+// The provider options JSON merge is expensive (3× marshal + merge +
+// unmarshal) and the inputs rarely change between turns. The cache key
+// combines the config pointer identity with the model's catwalk ID and
+// provider name so any config reload or model switch misses the cache.
+func (c *coordinator) cachedMergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderOptions, *float64, *float64, *int64, *float64, *float64) {
+	key := fmt.Sprintf("%p|%s|%s", c.cfg.Config(), model.CatwalkCfg.ID, model.ModelCfg.Provider)
+
+	c.providerOptsCacheMu.Lock()
+	if c.providerOptsCacheKey == key {
+		opts := c.providerOptsCache
+		c.providerOptsCacheMu.Unlock()
+		// Recompute the scalar overrides (cheap) since they don't need
+		// the JSON merge — they're just cmp.Or calls.
+		temp := cmp.Or(model.ModelCfg.Temperature, model.CatwalkCfg.Options.Temperature)
+		topP := cmp.Or(model.ModelCfg.TopP, model.CatwalkCfg.Options.TopP)
+		topK := cmp.Or(model.ModelCfg.TopK, model.CatwalkCfg.Options.TopK)
+		freqPenalty := cmp.Or(model.ModelCfg.FrequencyPenalty, model.CatwalkCfg.Options.FrequencyPenalty)
+		presPenalty := cmp.Or(model.ModelCfg.PresencePenalty, model.CatwalkCfg.Options.PresencePenalty)
+		return opts, temp, topP, topK, freqPenalty, presPenalty
+	}
+	c.providerOptsCacheMu.Unlock()
+
+	opts, temp, topP, topK, freqPenalty, presPenalty := mergeCallOptions(model, cfg)
+
+	c.providerOptsCacheMu.Lock()
+	c.providerOptsCache = opts
+	c.providerOptsCacheKey = key
+	c.providerOptsCacheMu.Unlock()
+
+	return opts, temp, topP, topK, freqPenalty, presPenalty
 }
 
 func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent, isSubAgent bool) (SessionAgent, error) {
@@ -1221,15 +1286,34 @@ func (c *coordinator) UpdateModels(ctx context.Context) error {
 	}
 	c.currentAgent.SetModels(large, small)
 
-	agentCfg, ok := c.cfg.Config().Agents[config.AgentCoder]
+	cfg := c.cfg.Config()
+	agentCfg, ok := cfg.Agents[config.AgentCoder]
 	if !ok {
 		return errCoderAgentNotConfigured
 	}
+
+	// Fast path: reuse cached tools when neither the config nor the MCP
+	// tool set has changed since the last build.
+	mcpGen := c.mcpToolsGen.Load()
+	c.toolsCacheMu.Lock()
+	if c.toolsCache != nil && c.toolsCacheCfg == cfg && c.toolsCacheMCP == mcpGen {
+		c.currentAgent.SetTools(c.toolsCache)
+		c.toolsCacheMu.Unlock()
+		return nil
+	}
+	c.toolsCacheMu.Unlock()
 
 	tools, err := c.buildTools(ctx, agentCfg, false)
 	if err != nil {
 		return err
 	}
+
+	c.toolsCacheMu.Lock()
+	c.toolsCache = tools
+	c.toolsCacheCfg = cfg
+	c.toolsCacheMCP = mcpGen
+	c.toolsCacheMu.Unlock()
+
 	c.currentAgent.SetTools(tools)
 	return nil
 }

@@ -194,15 +194,17 @@ func (s *service) Delete(ctx context.Context, id string) error {
 }
 
 func (s *service) DeleteSessionFiles(ctx context.Context, sessionID string) error {
+	// Fetch all files first so we can publish per-file DeletedEvent.
 	files, err := s.ListBySession(ctx, sessionID)
 	if err != nil {
 		return err
 	}
+	// Single batch DELETE instead of N individual deletes.
+	if err := s.q.DeleteSessionFiles(ctx, sessionID); err != nil {
+		return err
+	}
 	for _, file := range files {
-		err = s.Delete(ctx, file.ID)
-		if err != nil {
-			return err
-		}
+		s.Publish(pubsub.DeletedEvent, file)
 	}
 	return nil
 }

@@ -196,17 +196,33 @@ func (s *service) Create(ctx context.Context, sessionID string, params CreateMes
 }
 
 func (s *service) DeleteSessionMessages(ctx context.Context, sessionID string) error {
+	// Fetch all messages first so we can publish per-message DeletedEvent
+	// for each (the UI uses them to remove individual chat entries).
 	messages, err := s.List(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	for _, message := range messages {
-		if message.SessionID == sessionID {
-			err = s.Delete(ctx, message.ID)
-			if err != nil {
-				return err
+
+	// Single batch DELETE instead of N individual deletes.
+	if err := s.q.DeleteSessionMessages(ctx, sessionID); err != nil {
+		return err
+	}
+
+	// Drop any pending coalesced state and publish events for the
+	// already-fetched messages — no redundant Get queries needed.
+	s.mu.Lock()
+	for _, msg := range messages {
+		if p, ok := s.pending[msg.ID]; ok {
+			if p.timer != nil {
+				p.timer.Stop()
 			}
+			delete(s.pending, msg.ID)
 		}
+	}
+	s.mu.Unlock()
+
+	for _, msg := range messages {
+		s.Publish(pubsub.DeletedEvent, msg.Clone())
 	}
 	return nil
 }
@@ -565,76 +581,74 @@ func marshalParts(parts []ContentPart) ([]byte, error) {
 }
 
 func unmarshalParts(data []byte) ([]ContentPart, error) {
-	temp := []json.RawMessage{}
+	// Single-pass unmarshal into a wrapper with Data as json.RawMessage,
+	// avoiding the intermediate []json.RawMessage + per-element re-decode.
+	var temp []struct {
+		Type partType        `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
 
 	if err := json.Unmarshal(data, &temp); err != nil {
 		return nil, err
 	}
 
-	parts := make([]ContentPart, 0)
+	parts := make([]ContentPart, 0, len(temp))
 
-	for _, rawPart := range temp {
-		var wrapper struct {
-			Type partType        `json:"type"`
-			Data json.RawMessage `json:"data"`
-		}
-
-		if err := json.Unmarshal(rawPart, &wrapper); err != nil {
-			return nil, err
-		}
-
+	for _, wrapper := range temp {
+		var part ContentPart
 		switch wrapper.Type {
 		case reasoningType:
-			part := ReasoningContent{}
-			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+			p := ReasoningContent{}
+			if err := json.Unmarshal(wrapper.Data, &p); err != nil {
 				return nil, err
 			}
-			parts = append(parts, part)
+			part = p
 		case textType:
-			part := TextContent{}
-			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+			p := TextContent{}
+			if err := json.Unmarshal(wrapper.Data, &p); err != nil {
 				return nil, err
 			}
-			parts = append(parts, part)
+			part = p
 		case imageURLType:
-			part := ImageURLContent{}
-			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+			p := ImageURLContent{}
+			if err := json.Unmarshal(wrapper.Data, &p); err != nil {
 				return nil, err
 			}
-			parts = append(parts, part)
+			part = p
 		case binaryType:
-			part := BinaryContent{}
-			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+			p := BinaryContent{}
+			if err := json.Unmarshal(wrapper.Data, &p); err != nil {
 				return nil, err
 			}
-			parts = append(parts, part)
+			part = p
 		case toolCallType:
-			part := ToolCall{}
-			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+			p := ToolCall{}
+			if err := json.Unmarshal(wrapper.Data, &p); err != nil {
 				return nil, err
 			}
-			parts = append(parts, part)
+			part = p
 		case toolResultType:
-			part := ToolResult{}
-			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+			p := ToolResult{}
+			if err := json.Unmarshal(wrapper.Data, &p); err != nil {
 				return nil, err
 			}
-			parts = append(parts, part)
+			part = p
 		case finishType:
-			part := Finish{}
-			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+			p := Finish{}
+			if err := json.Unmarshal(wrapper.Data, &p); err != nil {
 				return nil, err
 			}
-			parts = append(parts, part)
+			part = p
 		case shellCommandType:
-			part := ShellCommand{}
-			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+			p := ShellCommand{}
+			if err := json.Unmarshal(wrapper.Data, &p); err != nil {
 				return nil, err
 			}
-			parts = append(parts, part)
+			part = p
 		default:
 			return nil, fmt.Errorf("unknown part type: %s", wrapper.Type)
 		}
+		parts = append(parts, part)
 	}
 
 	return parts, nil

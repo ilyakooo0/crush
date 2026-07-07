@@ -334,9 +334,7 @@ func (l *List) renderItemEntry(idx int) *listCacheEntry {
 
 // invalidateAll drops every cache entry. Called on width changes.
 func (l *List) invalidateAll() {
-	for k := range l.cache {
-		delete(l.cache, k)
-	}
+	l.cache = make(map[Item]*listCacheEntry)
 	l.totalHeightValid = false
 }
 
