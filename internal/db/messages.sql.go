@@ -38,7 +38,8 @@ type CreateMessageParams struct {
 }
 
 func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error) {
-	row := q.queryRow(ctx, q.createMessageStmt, createMessage,
+	row := q.queryRow(
+		ctx, q.createMessageStmt, createMessage,
 		arg.ID,
 		arg.SessionID,
 		arg.Role,
@@ -157,6 +158,53 @@ ORDER BY created_at ASC
 
 func (q *Queries) ListMessagesBySession(ctx context.Context, sessionID string) ([]Message, error) {
 	rows, err := q.query(ctx, q.listMessagesBySessionStmt, listMessagesBySession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Message{}
+	for rows.Next() {
+		var i Message
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Role,
+			&i.Parts,
+			&i.Model,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FinishedAt,
+			&i.Provider,
+			&i.IsSummaryMessage,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessagesBySessionAfter = `-- name: ListMessagesBySessionAfter :many
+SELECT m.id, m.session_id, m.role, m.parts, m.model, m.created_at, m.updated_at, m.finished_at, m.provider, m.is_summary_message
+FROM messages m
+WHERE m.session_id = ?
+  AND m.created_at >= (SELECT m2.created_at FROM messages m2 WHERE m2.id = ?)
+ORDER BY m.created_at ASC
+`
+
+type ListMessagesBySessionAfterParams struct {
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) ListMessagesBySessionAfter(ctx context.Context, arg ListMessagesBySessionAfterParams) ([]Message, error) {
+	rows, err := q.query(ctx, q.listMessagesBySessionAfterStmt, listMessagesBySessionAfter, arg.SessionID, arg.ID)
 	if err != nil {
 		return nil, err
 	}

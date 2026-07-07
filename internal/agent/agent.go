@@ -1080,7 +1080,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		currentAssistant.FinishThinking()
 		toolCalls := currentAssistant.ToolCalls()
 		// INFO: we use the cleanup context here because the genCtx has been cancelled.
-		msgs, createErr := a.messages.List(cleanupCtx, currentAssistant.SessionID)
+		// Only load messages from the current assistant message onward — tool
+		// results for this turn's tool calls can only exist after it.
+		msgs, createErr := a.messages.ListAfter(cleanupCtx, currentAssistant.SessionID, currentAssistant.ID)
 		if createErr != nil {
 			return nil, createErr
 		}
@@ -1653,23 +1655,20 @@ func syntheticToolResultsForOrphanedCalls(m message.Message, knownToolResultIDs 
 }
 
 func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.Session) ([]message.Message, error) {
+	if session.SummaryMessageID != "" {
+		msgs, err := a.messages.ListAfter(ctx, session.ID, session.SummaryMessageID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list messages after summary: %w", err)
+		}
+		if len(msgs) > 0 {
+			msgs[0].Role = message.User
+		}
+		return msgs, nil
+	}
+
 	msgs, err := a.messages.List(ctx, session.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list messages: %w", err)
-	}
-
-	if session.SummaryMessageID != "" {
-		summaryMsgIndex := -1
-		for i, msg := range msgs {
-			if msg.ID == session.SummaryMessageID {
-				summaryMsgIndex = i
-				break
-			}
-		}
-		if summaryMsgIndex != -1 {
-			msgs = msgs[summaryMsgIndex:]
-			msgs[0].Role = message.User
-		}
 	}
 	return msgs, nil
 }
