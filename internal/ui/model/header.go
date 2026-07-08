@@ -228,6 +228,9 @@ func renderHeaderDetails(
 	model := com.Config().GetModelByType(agentCfg.Model)
 	if model != nil && model.ContextWindow > 0 {
 		percentage := (float64(session.CompletionTokens+session.PromptTokens) / float64(model.ContextWindow)) * 100
+		if percentage > 100 {
+			percentage = 100
+		}
 		percentageText := fmt.Sprintf("%d%%", int(percentage))
 		if session.EstimatedUsage {
 			percentageText = "~" + percentageText

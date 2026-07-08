@@ -115,6 +115,9 @@ func formatTokensAndCost(t *styles.Styles, tokens, contextWindow int64, cost flo
 	if contextWindow > 0 {
 		percentage = (float64(tokens) / float64(contextWindow)) * 100
 	}
+	if percentage > 100 {
+		percentage = 100
+	}
 
 	formattedCost := t.ModelInfo.Cost.Render(fmt.Sprintf("$%.2f", cost))
 

@@ -2878,6 +2878,38 @@ func (m *UI) FullHelp() [][]key.Binding {
 				binds = append(binds, []key.Binding{k.Chat.PillLeft})
 			}
 		}
+	case uiLanding:
+		binds = append(
+			binds,
+			[]key.Binding{
+				commands,
+				k.Models,
+				k.Sessions,
+				k.ToggleYolo,
+			},
+		)
+		editorBinds := []key.Binding{
+			k.Editor.Newline,
+			k.Editor.MentionFile,
+			k.Editor.OpenEditor,
+		}
+		if m.currentModelSupportsImages() {
+			editorBinds = append(editorBinds, k.Editor.AddImage, k.Editor.PasteImage)
+		}
+		if m.textarea.Value() == "" {
+			editorBinds = append(editorBinds, k.Editor.ShellCommand)
+		}
+		binds = append(binds, editorBinds)
+		if hasAttachments {
+			binds = append(
+				binds,
+				[]key.Binding{
+					k.Editor.AttachmentDeleteMode,
+					k.Editor.DeleteAllAttachments,
+					k.Editor.Escape,
+				},
+			)
+		}
 	default:
 		if m.session == nil {
 			// no session selected
