@@ -1134,7 +1134,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				return nil, createErr
 			}
 		}
-		var fantasyErr *fantasy.Error
 		var providerErr *fantasy.ProviderError
 		const defaultTitle = "Provider Error"
 		linkStyle := lipgloss.NewStyle().Foreground(charmtone.Guac).Underline(true)
@@ -1158,7 +1157,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			} else {
 				currentAssistant.AddFinish(message.FinishReasonError, cmp.Or(stringext.Capitalize(providerErr.Title), defaultTitle), providerErr.Message)
 			}
-		} else if errors.As(err, &fantasyErr) {
+		} else if fantasyErr, ok := errors.AsType[*fantasy.Error](err); ok {
 			currentAssistant.AddFinish(message.FinishReasonError, cmp.Or(stringext.Capitalize(fantasyErr.Title), defaultTitle), fantasyErr.Message)
 		} else {
 			currentAssistant.AddFinish(message.FinishReasonError, defaultTitle, err.Error())

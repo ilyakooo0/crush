@@ -122,7 +122,7 @@ func fnvAddBytes(h uint64, b []byte) uint64 {
 // fnvAddU64 folds v's 8 little-endian bytes into an in-progress hash,
 // matching binary.LittleEndian.PutUint64 followed by a Write.
 func fnvAddU64(h, v uint64) uint64 {
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		h ^= uint64(byte(v >> (8 * i)))
 		h *= fnvPrime64
 	}

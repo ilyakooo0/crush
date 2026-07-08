@@ -235,8 +235,7 @@ func NewViewTool(
 			}
 			content, hasMore, err := readTextFile(filePath, params.Offset, params.Limit, maxContentSize)
 			if err != nil {
-				var tooLarge contentTooLargeError
-				if errors.As(err, &tooLarge) {
+				if tooLarge, ok := errors.AsType[contentTooLargeError](err); ok {
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("Content section is too large (%d bytes). Maximum size is %d bytes",
 						tooLarge.Size, tooLarge.Max)), nil
 				}
@@ -286,7 +285,8 @@ func addLineNumbers(content string, startLine int) string {
 	}
 
 	var b strings.Builder
-	for i, line := range strings.Split(content, "\n") {
+	var i int
+	for line := range strings.SplitSeq(content, "\n") {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
@@ -300,6 +300,7 @@ func addLineNumbers(content string, startLine int) string {
 		b.WriteString(numStr)
 		b.WriteByte('|')
 		b.WriteString(line)
+		i++
 	}
 
 	return b.String()
