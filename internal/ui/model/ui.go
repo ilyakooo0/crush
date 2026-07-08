@@ -3427,7 +3427,7 @@ func (m *UI) insertFileCompletion(path string) tea.Cmd {
 			// Skip attachment if file was already read and hasn't been modified.
 			lastRead := m.com.Workspace.FileTrackerLastReadTime(m.ctx, m.session.ID, absPath)
 			if !lastRead.IsZero() {
-				if info, err := os.Stat(path); err == nil && !info.ModTime().After(lastRead) {
+				if info, err := os.Stat(absPath); err == nil && !info.ModTime().After(lastRead) {
 					return nil
 				}
 			}
@@ -3438,14 +3438,14 @@ func (m *UI) insertFileCompletion(path string) tea.Cmd {
 		m.sessionFileReads = append(m.sessionFileReads, absPath)
 
 		// Add file as attachment.
-		content, err := os.ReadFile(path)
+		content, err := os.ReadFile(absPath)
 		if err != nil {
 			// If it fails, let the LLM handle it later.
 			return nil
 		}
 
 		return message.Attachment{
-			FilePath: path,
+			FilePath: absPath,
 			FileName: filepath.Base(path),
 			MimeType: mimeOf(content),
 			Content:  content,
