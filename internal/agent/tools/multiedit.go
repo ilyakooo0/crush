@@ -445,7 +445,6 @@ func applyEditToContent(content string, edit MultiEditOperation) (string, error)
 		}
 
 		newContent = content[:index] + edit.NewString + content[index+len(edit.OldString):]
-		replacementCount = 1
 	}
 
 	return newContent, nil

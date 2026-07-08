@@ -1367,7 +1367,7 @@ func (t *baseToolMessageItem) formatBashResultForCopy() string {
 
 	var meta tools.BashResponseMetadata
 	if t.result.Metadata != "" {
-		json.Unmarshal([]byte(t.result.Metadata), &meta)
+		_ = json.Unmarshal([]byte(t.result.Metadata), &meta)
 	}
 
 	output := meta.Output
@@ -1390,7 +1390,7 @@ func (t *baseToolMessageItem) formatViewResultForCopy() string {
 
 	var meta tools.ViewResponseMetadata
 	if t.result.Metadata != "" {
-		json.Unmarshal([]byte(t.result.Metadata), &meta)
+		_ = json.Unmarshal([]byte(t.result.Metadata), &meta)
 	}
 
 	if meta.Content == "" {
@@ -1461,7 +1461,7 @@ func (t *baseToolMessageItem) formatEditResultForCopy() string {
 	}
 
 	var params tools.EditParams
-	json.Unmarshal([]byte(t.toolCall.Input), &params)
+	_ = json.Unmarshal([]byte(t.toolCall.Input), &params)
 
 	var result strings.Builder
 
@@ -1496,7 +1496,7 @@ func (t *baseToolMessageItem) formatMultiEditResultForCopy() string {
 	}
 
 	var params tools.MultiEditParams
-	json.Unmarshal([]byte(t.toolCall.Input), &params)
+	_ = json.Unmarshal([]byte(t.toolCall.Input), &params)
 
 	var result strings.Builder
 	if meta.OldContent != "" || meta.NewContent != "" {

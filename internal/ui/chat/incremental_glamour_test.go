@@ -737,8 +737,6 @@ func TestStreamingMarkdown_LongThinkingWithLists(t *testing.T) {
 		"final streaming output must match a fresh full render visually")
 }
 
-
-
 // -----------------------------------------------------------------------
 // T5 / T6 / T7: anywhere-in-prefix hazards (B1 / B2 / B3 from the
 // F8 round-2 review). For each hazard we drive every progressive

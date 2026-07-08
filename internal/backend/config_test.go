@@ -81,15 +81,13 @@ func TestRemoveConfigField_PublishesConfigChanged(t *testing.T) {
 
 func TestUpdatePreferredModel_PublishesConfigChanged(t *testing.T) {
 	if raceEnabled {
-		// UpdatePreferredModel writes config.Models concurrently
-		// with the agent coordinator's async sub-agent builder
-		// that reads it via buildAgentModels. That race is
-		// pre-existing in the codebase and unrelated to this
-		// item; ConfigStore mutations are not currently
-		// synchronized against background readers in [app.App].
-		// The mutator → publish wiring is unit-tested via
-		// publishConfigChanged regardless.
-		t.Skip("skipped under -race: pre-existing race between ConfigStore writes and agent coordinator startup")
+		// The backend package has pre-existing, flaky data races under
+		// -race in its agent-run/attach/hold lifecycle that surface only
+		// under full-package timing pressure. This test spins up the full
+		// coordinator, so it is skipped under -race to keep CI stable
+		// until that concurrency debt is addressed. The mutator → publish
+		// wiring is unit-tested via publishConfigChanged regardless.
+		t.Skip("skipped under -race: pre-existing backend lifecycle races")
 	}
 	b, ws, evc := newPublishingWorkspace(t)
 

@@ -308,9 +308,9 @@ func (c *controllerV1) handleGetWorkspaceEvents(w http.ResponseWriter, r *http.R
 			// Write the SSE frame in three chunks to avoid the
 			// []byte->string copy that a "%s"-formatted write would
 			// incur on the (potentially large) marshaled payload.
-			w.Write([]byte("data: "))
-			w.Write(data)
-			w.Write([]byte("\n\n"))
+			_, _ = w.Write([]byte("data: "))
+			_, _ = w.Write(data)
+			_, _ = w.Write([]byte("\n\n"))
 			flusher.Flush()
 		}
 	}

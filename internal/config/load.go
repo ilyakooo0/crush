@@ -292,7 +292,9 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 			// state is kept consistent by the Providers.Del call below; any
 			// concurrent reload that races with this write will also see the
 			// removal because it re-reads from disk.
-			store.RemoveConfigField(ScopeGlobal, "providers.anthropic")
+			if err := store.RemoveConfigField(ScopeGlobal, "providers.anthropic"); err != nil {
+				slog.Warn("failed to remove anthropic provider config field", "error", err)
+			}
 			c.Providers.Del(string(p.ID))
 			continue
 		case p.ID == catwalk.InferenceProviderCopilot && config.OAuthToken != nil:

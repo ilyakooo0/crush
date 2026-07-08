@@ -60,11 +60,11 @@ func getToolInteractionSignature(content fantasy.ResponseContent) uint64 {
 		if tr, ok := resultsByID[tc.ToolCallID]; ok {
 			output = toolResultOutputString(tr.Result)
 		}
-		io.WriteString(h, tc.ToolName)
+		_, _ = io.WriteString(h, tc.ToolName)
 		h.Write([]byte{0})
-		io.WriteString(h, tc.Input)
+		_, _ = io.WriteString(h, tc.Input)
 		h.Write([]byte{0})
-		io.WriteString(h, output)
+		_, _ = io.WriteString(h, output)
 		h.Write([]byte{0})
 	}
 	return h.Sum64()

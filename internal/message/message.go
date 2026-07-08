@@ -86,6 +86,11 @@ type pendingState struct {
 	// but other flushers must back off.
 	flushing bool
 
+	// flushDone is non-nil exactly while flushing is true. It is closed
+	// (under service.mu) when the in-flight flush completes, so a sync
+	// caller can wait on it instead of polling.
+	flushDone chan struct{}
+
 	// timer is the active debounce timer, or nil if no flush is
 	// scheduled. Stopped and reset when a terminal update preempts
 	// the debounce window.
@@ -341,9 +346,17 @@ func (s *service) flushOne(ctx context.Context, id string, syncCaller bool) erro
 				s.mu.Unlock()
 				return nil
 			}
+			// Wait for the in-flight flush to finish rather than
+			// polling. flushDone is closed under s.mu when flushing
+			// clears, and we capture it under the same lock, so the
+			// wakeup can never be missed.
+			done := p.flushDone
 			s.mu.Unlock()
-			// Brief yield; in-flight write should land in <1ms typical.
-			time.Sleep(time.Millisecond)
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			continue
 		}
 		if !p.dirty {
@@ -366,6 +379,7 @@ func (s *service) flushOne(ctx context.Context, id string, syncCaller bool) erro
 		}
 		isTerminal := shouldFlushNow(prev, &snap)
 		p.flushing = true
+		p.flushDone = make(chan struct{})
 		p.dirty = false
 		s.mu.Unlock()
 
@@ -373,6 +387,10 @@ func (s *service) flushOne(ctx context.Context, id string, syncCaller bool) erro
 
 		s.mu.Lock()
 		p.flushing = false
+		if p.flushDone != nil {
+			close(p.flushDone)
+			p.flushDone = nil
+		}
 		if err == nil {
 			p.lastFlushed = snap
 			p.hasFlushed = true

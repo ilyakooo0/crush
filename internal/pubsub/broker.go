@@ -191,10 +191,16 @@ func (b *Broker[T]) Publish(t EventType, payload T) {
 		case sub <- event:
 		default:
 			// Channel is full, subscriber is slow — skip this event.
-			// Lossy by design; counted and logged so saturation is
-			// observable.
-			b.dropCount.Add(1)
-			slog.Warn("Pubsub buffer full; dropping event", "type", t)
+			// Lossy by design; counted so saturation is observable via
+			// DropCount. The warning is throttled to power-of-two drop
+			// counts (1, 2, 4, 8, …): saturation is exactly when this
+			// path runs hottest, and an unthrottled per-event log — while
+			// holding the RLock — would turn a slow subscriber into a
+			// log-storm that slows every publisher further.
+			if n := b.dropCount.Add(1); n&(n-1) == 0 {
+				slog.Warn("Pubsub buffer full; dropping events",
+					"type", t, "dropped_total", n)
+			}
 		}
 	}
 }

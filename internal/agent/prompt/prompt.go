@@ -115,7 +115,7 @@ func processContextPath(p string, store *config.ConfigStore) []ContextFile {
 		return contexts
 	}
 	if info.IsDir() {
-		filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(fullPath, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

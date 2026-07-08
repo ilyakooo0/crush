@@ -320,7 +320,9 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 	}
 
 	// force update of agent models before running so mcp tools are loaded
-	app.AgentCoordinator.UpdateModels(ctx)
+	if err := app.AgentCoordinator.UpdateModels(ctx); err != nil {
+		slog.Warn("failed to update agent models", "error", err)
+	}
 
 	defer stopSpinner()
 

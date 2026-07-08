@@ -2,6 +2,7 @@ version: "2"
 linters:
   enable:
     - bodyclose
+    - errcheck
     # - exhaustive
     # - goconst
     # - godot
@@ -9,6 +10,7 @@ linters:
     # - gomoddirectives
     - goprintffuncname
     # - gosec
+    - ineffassign
     - misspell
     # - nakedret
     # - nestif
@@ -23,17 +25,23 @@ linters:
     - tparallel
     # - unconvert
     # - unparam
+    - unused
     - whitespace
     # - wrapcheck
-  disable:
-    - errcheck
-    - ineffassign
-    - unused
   exclusions:
     generated: lax
     presets:
       - common-false-positives
+      # Ignores the idiomatic-to-drop error family (*Close, *Flush,
+      # Fprint*, os.Remove/RemoveAll, os.Setenv, stdout/stderr writes) so
+      # errcheck only flags genuinely meaningful dropped errors.
+      - std-error-handling
     rules:
+      # Dropped errors in tests (setup writes, httptest encoders) are
+      # low-signal — test failures surface them anyway.
+      - path: _test\.go
+        linters:
+          - errcheck
       - text: '(slog|log)\.\w+'
         linters:
           - noctx

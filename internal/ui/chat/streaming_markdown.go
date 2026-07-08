@@ -327,10 +327,7 @@ func scanSafeBoundaries(content string) []int {
 		// A list closes when a blank line is followed by a
 		// non-marker line at indent < listBaseIndent+2 (not
 		// a continuation paragraph).
-		listClosesHere := false
-		if listDepth > 0 && blankPending && !isMarker && indent < listBaseIndent+2 {
-			listClosesHere = true
-		}
+		listClosesHere := listDepth > 0 && blankPending && !isMarker && indent < listBaseIndent+2
 
 		// Non-blank line. If a blank line preceded, this is a
 		// boundary candidate at offset `off`. Evaluate BEFORE

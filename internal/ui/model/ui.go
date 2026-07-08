@@ -1693,7 +1693,9 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			if err := m.com.Workspace.UpdatePreferredModel(config.ScopeGlobal, agentCfg.Model, currentModel); err != nil {
 				return util.ReportError(err)()
 			}
-			m.com.Workspace.UpdateAgentModel(context.TODO())
+			if err := m.com.Workspace.UpdateAgentModel(context.TODO()); err != nil {
+				slog.Warn("failed to update agent model", "error", err)
+			}
 			status := "disabled"
 			if currentModel.Think {
 				status = "enabled"
@@ -1768,7 +1770,9 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		}
 
 		cmds = append(cmds, func() tea.Msg {
-			m.com.Workspace.UpdateAgentModel(context.TODO())
+			if err := m.com.Workspace.UpdateAgentModel(context.TODO()); err != nil {
+				slog.Warn("failed to update agent model", "error", err)
+			}
 			return util.NewInfoMsg("Reasoning effort set to " + msg.Effort)
 		})
 		m.dialog.CloseDialog(dialog.ReasoningID)
@@ -3240,7 +3244,7 @@ func (m *UI) openEditor(value string) tea.Cmd {
 		return util.ReportError(err)
 	}
 	tmpPath := tmpfile.Name()
-	defer tmpfile.Close() //nolint:errcheck
+	defer tmpfile.Close()
 	if _, err := tmpfile.WriteString(value); err != nil {
 		return util.ReportError(err)
 	}
@@ -4423,7 +4427,9 @@ func (m *UI) runMCPPrompt(clientID, promptID string, arguments map[string]string
 
 func (m *UI) handleStateChanged() tea.Cmd {
 	return func() tea.Msg {
-		m.com.Workspace.UpdateAgentModel(context.Background())
+		if err := m.com.Workspace.UpdateAgentModel(context.Background()); err != nil {
+			slog.Warn("failed to update agent model", "error", err)
+		}
 		return mcpStateChangedMsg{
 			states: m.com.Workspace.MCPGetStates(),
 		}
