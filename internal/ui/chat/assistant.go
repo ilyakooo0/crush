@@ -272,26 +272,33 @@ func (a *AssistantMessageItem) RawRender(width int) string {
 	return a.rawRender(width, a.renderKeys())
 }
 
-// rawRender renders the item using per-render keys computed once by the
-// caller, so the hashing/tool-call work is shared with Render.
-func (a *AssistantMessageItem) rawRender(width int, keys assistantRenderKeys) string {
+// rawRenderBody renders the assistant message body (thinking / content /
+// error sections) WITHOUT the spinner suffix. The body is stable across
+// animation ticks — only the spinner changes — so Render caches its
+// prefixed form and reuses it while re-rendering just the spinner.
+func (a *AssistantMessageItem) rawRenderBody(width int, keys assistantRenderKeys) string {
 	cappedWidth := cappedMessageWidth(width)
-
-	var spinner string
-	if a.isSpinningWithToolCalls(keys.toolCallCount) {
-		spinner = a.renderSpinning()
-	}
-
 	content, height := a.renderMessageContent(cappedWidth, keys)
-	highlightedContent := a.renderHighlighted(content, cappedWidth, height)
-	if spinner != "" {
-		if highlightedContent != "" {
-			highlightedContent += "\n\n"
-		}
-		return highlightedContent + spinner
-	}
+	return a.renderHighlighted(content, cappedWidth, height)
+}
 
-	return highlightedContent
+// rawRender renders the item body plus, when spinning, the spinner suffix.
+// It is the reference full render; Render reproduces its output byte-for-byte
+// via a cached body + freshly-prefixed spinner (validated in
+// assistant_render_test.go).
+func (a *AssistantMessageItem) rawRender(width int, keys assistantRenderKeys) string {
+	body := a.rawRenderBody(width, keys)
+	if !a.isSpinningWithToolCalls(keys.toolCallCount) {
+		return body
+	}
+	spinner := a.renderSpinning()
+	if spinner == "" {
+		return body
+	}
+	if body != "" {
+		return body + "\n\n" + spinner
+	}
+	return spinner
 }
 
 // Render implements MessageItem.
@@ -311,14 +318,10 @@ func (a *AssistantMessageItem) Render(width int) string {
 	// suffix changes every animation frame) or while a highlight
 	// range is active (selection drag).
 	keys := a.renderKeys()
-	useCache := !a.isSpinningWithToolCalls(keys.toolCallCount) && !a.isHighlighted()
+	spinning := a.isSpinningWithToolCalls(keys.toolCallCount)
 	cappedWidth := cappedMessageWidth(width)
 	key := a.prefixCacheKey(cappedWidth, keys)
-	if useCache {
-		if cached, ok := a.getCachedPrefixedRender(width, key); ok {
-			return cached
-		}
-	}
+
 	// Only render the style actually used; rendering both wastes work
 	// (lipgloss.Render is not free) when one is discarded.
 	var prefix string
@@ -327,8 +330,47 @@ func (a *AssistantMessageItem) Render(width int) string {
 	} else {
 		prefix = a.sty.Messages.AssistantBlurred.Render()
 	}
-	rendered := a.rawRender(width, keys)
-	lines := strings.Split(rendered, "\n")
+
+	// Resolve the prefixed body. Its cache key excludes the spinner frame,
+	// so it stays valid across animation ticks — the whole point of the
+	// decoupling: prefix the (potentially long) thinking body once per
+	// content change instead of on every 20fps spinner tick. Highlighting
+	// mutates the body itself, so it bypasses the cache.
+	useCache := !a.isHighlighted()
+	prefixedBody, ok := "", false
+	if useCache {
+		prefixedBody, ok = a.getCachedPrefixedRender(width, key)
+	}
+	bodyEmpty := false
+	if !ok {
+		body := a.rawRenderBody(width, keys)
+		bodyEmpty = body == ""
+		prefixedBody = prefixLines(prefix, body)
+		// Cache only a non-empty body: an empty body prefixes to the bare
+		// prefix and is cheap to recompute, and the cache treats "" as a
+		// miss, so caching it would be indistinguishable from no entry.
+		if useCache && !bodyEmpty {
+			a.setCachedPrefixedRender(prefixedBody, width, key)
+		}
+	}
+	// A cache hit implies a non-empty body (empty bodies are never cached),
+	// so bodyEmpty stays false on the hit path.
+
+	if !spinning {
+		return prefixedBody
+	}
+	spinner := a.renderSpinning()
+	if spinner == "" {
+		return prefixedBody
+	}
+	return assembleSpinningRender(prefix, prefixedBody, bodyEmpty, prefixLines(prefix, spinner))
+}
+
+// prefixLines prepends prefix to every line of s, matching the per-line
+// focus/selection prefix that Render applies (done manually rather than via
+// lipgloss.Render, whose wrapping logic is costly for long messages).
+func prefixLines(prefix, s string) string {
+	lines := strings.Split(s, "\n")
 	var sb strings.Builder
 	for i, line := range lines {
 		if i > 0 {
@@ -337,11 +379,20 @@ func (a *AssistantMessageItem) Render(width int) string {
 		sb.WriteString(prefix)
 		sb.WriteString(line)
 	}
-	out := sb.String()
-	if useCache {
-		a.setCachedPrefixedRender(out, width, key)
+	return sb.String()
+}
+
+// assembleSpinningRender reconstructs the prefixed body+spinner output
+// byte-for-byte identically to prefixLines(prefix, body+"\n\n"+spinner),
+// but from the separately-prefixed (and body-cached) parts. When the body is
+// empty the reference render is the spinner alone; otherwise the "\n\n"
+// separator becomes one prefixed empty line between body and spinner. This
+// exact identity is validated in assistant_render_test.go.
+func assembleSpinningRender(prefix, prefixedBody string, bodyEmpty bool, prefixedSpinner string) string {
+	if bodyEmpty {
+		return prefixedSpinner
 	}
-	return out
+	return prefixedBody + "\n" + prefix + "\n" + prefixedSpinner
 }
 
 // prefixCacheKey builds the F3 prefixed-render cache key. We pack the
