@@ -2752,8 +2752,16 @@ func (m *UI) ShortHelp() []key.Binding {
 				binds = append(binds, k.Chat.PillLeft)
 			}
 		}
+	case uiLanding:
+		binds = append(
+			binds,
+			tab,
+			commands,
+			k.Models,
+			k.Editor.Newline,
+			k.Chat.NewSession,
+		)
 	default:
-		// TODO: other states
 		// if m.session == nil {
 		// no session selected
 		binds = append(
@@ -4413,8 +4421,7 @@ func (m *UI) runMCPPrompt(clientID, promptID string, arguments map[string]string
 	load := func() tea.Msg {
 		prompt, err := m.com.Workspace.GetMCPPrompt(clientID, promptID, arguments)
 		if err != nil {
-			// TODO: make this better
-			return util.ReportError(err)()
+			return util.ReportError(fmt.Errorf("failed to load MCP prompt %q from %q: %w", promptID, clientID, err))()
 		}
 
 		if prompt == "" {

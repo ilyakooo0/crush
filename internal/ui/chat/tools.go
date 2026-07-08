@@ -91,7 +91,7 @@ type DefaultToolRenderContext struct{}
 
 // RenderTool implements the [ToolRenderer] interface.
 func (d *DefaultToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string {
-	return "TODO: Implement Tool Renderer For: " + opts.ToolCall.Name
+	return sty.Messages.AssistantBlurred.Render(fmt.Sprintf("Unknown tool: %s", opts.ToolCall.Name))
 }
 
 // ToolRenderOpts contains the data needed to render a tool call.
