@@ -57,6 +57,41 @@ func TestPublishMustDeliverDuringShutdown(t *testing.T) {
 	wg.Wait()
 }
 
+// TestPublishMustDeliverDuringUnsubscribe ensures a send can't race a
+// per-subscriber teardown: each subscriber is cancelled individually while
+// PublishMustDeliver is delivering to it. Run under -race, this fails if the
+// broker ever sends on a channel a teardown goroutine is concurrently closing.
+func TestPublishMustDeliverDuringUnsubscribe(t *testing.T) {
+	t.Parallel()
+	b := NewBrokerWithOptions[int](1)
+	b.SetMustDeliverTimeout(time.Millisecond)
+	defer b.Shutdown()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			b.PublishMustDeliver(context.Background(), CreatedEvent, 1)
+		}
+	}()
+
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Per-subscriber context: cancelling it tears the subscriber
+			// down (removing + closing its channel) concurrently with the
+			// publisher above. Never drained, so its buffer saturates and
+			// sends block, widening the race window.
+			ctx, cancel := context.WithCancel(context.Background())
+			b.Subscribe(ctx)
+			cancel()
+		}()
+	}
+	wg.Wait()
+}
+
 // TestSubscribeGoroutineExitsOnShutdown ensures the per-subscriber goroutine
 // unblocks on Shutdown even when its context outlives the broker.
 func TestSubscribeGoroutineExitsOnShutdown(t *testing.T) {

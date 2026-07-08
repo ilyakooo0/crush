@@ -217,25 +217,31 @@ func (b *Broker[T]) Publish(t EventType, payload T) {
 // after timeout — recovery is the subscriber's responsibility (e.g. a
 // re-fetch on the next session-visible event).
 func (b *Broker[T]) PublishMustDeliver(ctx context.Context, t EventType, payload T) {
+	// Hold the read lock across the bounded-blocking sends below. Both
+	// Shutdown and per-subscriber teardown close subscriber channels under
+	// the write lock, so holding RLock here is what guarantees a send can
+	// never race a close. The earlier lock-free snapshot released b.mu
+	// before sending, which let Shutdown/unsubscribe close a channel
+	// mid-send — a data race the race detector flags (the recover() that
+	// used to sit in mustDeliver only masked the resulting panic).
+	//
+	// The cost is bounded and paid only under saturation: a stalled
+	// subscriber can delay Subscribe/Shutdown by at most (number of
+	// subscribers × mustDeliverTimeout). With this app's handful of
+	// subscribers that ceiling is a few hundred milliseconds, and only
+	// when a subscriber's buffer is already full.
 	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	select {
 	case <-b.done:
-		b.mu.RUnlock()
 		return
 	default:
 	}
+
 	event := Event[T]{Type: t, Payload: payload}
 	timeout := b.mustDeliverTimeout
-	// Snapshot the subscribers so the bounded-blocking sends below run
-	// without holding b.mu. Holding the read lock across a blocking send
-	// would stall Subscribe/Shutdown for up to N×timeout under saturation.
-	subs := make([]chan Event[T], 0, len(b.subs))
 	for sub := range b.subs {
-		subs = append(subs, sub)
-	}
-	b.mu.RUnlock()
-
-	for _, sub := range subs {
 		if b.mustDeliver(ctx, sub, event, timeout) {
 			// Context cancelled; stop delivering to the remaining subs.
 			return
@@ -245,12 +251,10 @@ func (b *Broker[T]) PublishMustDeliver(ctx context.Context, t EventType, payload
 
 // mustDeliver performs one bounded-blocking send. It reports whether the
 // context was cancelled (so the caller stops delivering to remaining
-// subscribers). Because sends happen without holding b.mu, the channel may
-// be closed concurrently by Shutdown or an unsubscribe; sending on a closed
-// channel panics, so we recover and treat that subscriber as gone.
+// subscribers). The caller holds b.mu.RLock, and every subscriber-channel
+// close happens under b.mu's write lock, so the channel cannot be closed
+// concurrently with this send.
 func (b *Broker[T]) mustDeliver(ctx context.Context, sub chan Event[T], event Event[T], timeout time.Duration) (ctxDone bool) {
-	defer func() { _ = recover() }()
-
 	// Fast path: non-blocking send.
 	select {
 	case sub <- event:
