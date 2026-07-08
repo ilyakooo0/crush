@@ -384,9 +384,9 @@ func (s *Session) confirmRenameSession() Action {
 }
 
 func (s *Session) updateSession(session session.Session) {
-	for existingID, sess := range s.sessions {
+	for i, sess := range s.sessions {
 		if sess.ID == session.ID {
-			s.sessions[existingID] = session
+			s.sessions[i] = session
 			break
 		}
 	}

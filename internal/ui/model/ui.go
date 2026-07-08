@@ -1209,9 +1209,6 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 		msgPtrs[i] = &msgs[i]
 	}
 	toolResultMap := chat.BuildToolResultMap(msgPtrs)
-	if len(msgPtrs) > 0 {
-		m.lastUserMessageTime = msgPtrs[0].CreatedAt
-	}
 
 	// Add messages to chat with linked tool results
 	items := make([]chat.MessageItem, 0, len(msgs)*2)
@@ -1501,18 +1498,13 @@ func (m *UI) handleChildSessionMessage(event pubsub.Event[message.Message]) tea.
 
 	// Find the parent agent tool item.
 	var agentItem chat.NestedToolContainer
-	for i := 0; i < m.chat.Len(); i++ {
-		item := m.chat.MessageItem(toolCallID)
-		if item == nil {
-			continue
-		}
+	if item := m.chat.MessageItem(toolCallID); item != nil {
 		if agent, ok := item.(chat.NestedToolContainer); ok {
 			if toolMessageItem, ok := item.(chat.ToolMessageItem); ok {
 				if toolMessageItem.ToolCall().ID == toolCallID {
 					// Verify this agent belongs to the correct parent message.
 					// We can't directly check parentMessageID on the item, so we trust the session parsing.
 					agentItem = agent
-					break
 				}
 			}
 		}
