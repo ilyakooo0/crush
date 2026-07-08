@@ -133,19 +133,28 @@ func (s *ConfigStore) WorkingDir() string {
 
 // Resolver returns the variable resolver.
 func (s *ConfigStore) Resolver() VariableResolver {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
 	return s.resolver
 }
 
 // Resolve resolves a variable reference using the configured resolver.
 func (s *ConfigStore) Resolve(key string) (string, error) {
-	if s.resolver == nil {
+	// Snapshot the resolver under the lock, then resolve without it:
+	// ResolveValue may be slow and can call back into the store.
+	s.configMu.RLock()
+	resolver := s.resolver
+	s.configMu.RUnlock()
+	if resolver == nil {
 		return "", fmt.Errorf("no variable resolver configured")
 	}
-	return s.resolver.ResolveValue(key)
+	return resolver.ResolveValue(key)
 }
 
 // KnownProviders returns the list of known providers.
 func (s *ConfigStore) KnownProviders() []catwalk.Provider {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
 	return s.knownProviders
 }
 
@@ -161,6 +170,8 @@ func (s *ConfigStore) Overrides() *RuntimeOverrides {
 
 // LoadedPaths returns the config file paths that were successfully loaded.
 func (s *ConfigStore) LoadedPaths() []string {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
 	return slices.Clone(s.loadedPaths)
 }
 
@@ -233,10 +244,13 @@ func (s *ConfigStore) atomicWrite(scope Scope, fn func(current []byte) ([]byte, 
 func (s *ConfigStore) configPath(scope Scope) (string, error) {
 	switch scope {
 	case ScopeWorkspace:
-		if s.workspacePath == "" {
+		s.configMu.RLock()
+		workspacePath := s.workspacePath
+		s.configMu.RUnlock()
+		if workspacePath == "" {
 			return "", ErrNoWorkspaceConfig
 		}
-		return s.workspacePath, nil
+		return workspacePath, nil
 	default:
 		return s.globalDataPath, nil
 	}
@@ -484,8 +498,11 @@ func (s *ConfigStore) SetProviderAPIKey(scope Scope, providerID string, apiKey a
 		return nil
 	}
 
+	s.configMu.RLock()
+	knownProviders := s.knownProviders
+	s.configMu.RUnlock()
 	var foundProvider *catwalk.Provider
-	for _, p := range s.knownProviders {
+	for _, p := range knownProviders {
 		if string(p.ID) == providerID {
 			foundProvider = &p
 			break
@@ -885,8 +902,11 @@ func (s *ConfigStore) CaptureStalenessSnapshot(paths []string) {
 	}
 
 	// Also track workspace and global config paths if set
-	if s.workspacePath != "" {
-		abs, err := filepath.Abs(s.workspacePath)
+	s.configMu.RLock()
+	workspacePath := s.workspacePath
+	s.configMu.RUnlock()
+	if workspacePath != "" {
+		abs, err := filepath.Abs(workspacePath)
 		if err == nil {
 			seen[abs] = struct{}{}
 		}
@@ -968,9 +988,6 @@ func (s *ConfigStore) reloadFromDiskLocked(ctx context.Context) error {
 		return fmt.Errorf("invalid hook configuration on reload: %w", err)
 	}
 
-	// Preserve runtime overrides
-	overrides := s.overrides
-
 	// Reconfigure providers
 	env := env.New()
 	resolver := NewShellVariableResolver(env)
@@ -988,16 +1005,19 @@ func (s *ConfigStore) reloadFromDiskLocked(ctx context.Context) error {
 	oldLoadedPaths := s.loadedPaths
 	oldResolver := s.resolver
 	oldKnownProviders := s.knownProviders
-	oldOverrides := s.overrides
 	oldWorkspacePath := s.workspacePath
 
-	// Update store state BEFORE running model/agent setup (so they see new config)
-	s.setConfig(cfg)
+	// Update store state BEFORE running model/agent setup (so they see new
+	// config). All reload-mutated fields are published atomically under
+	// configMu so the lock-free public readers (Resolver, KnownProviders,
+	// LoadedPaths, configPath) never observe a torn update.
+	s.configMu.Lock()
+	s.config = cfg
 	s.loadedPaths = loadedPaths
 	s.resolver = resolver
 	s.knownProviders = providers
-	s.overrides = overrides
 	s.workspacePath = workspacePath
+	s.configMu.Unlock()
 
 	// Mirror startup flow: setup models and agents against NEW config.
 	var setupErr error
@@ -1016,12 +1036,13 @@ func (s *ConfigStore) reloadFromDiskLocked(ctx context.Context) error {
 
 	// Rollback on setup failure
 	if setupErr != nil {
-		s.setConfig(oldConfig)
+		s.configMu.Lock()
+		s.config = oldConfig
 		s.loadedPaths = oldLoadedPaths
 		s.resolver = oldResolver
 		s.knownProviders = oldKnownProviders
-		s.overrides = oldOverrides
 		s.workspacePath = oldWorkspacePath
+		s.configMu.Unlock()
 		return setupErr
 	}
 
