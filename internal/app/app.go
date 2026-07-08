@@ -74,8 +74,13 @@ type App struct {
 	tuiWG           *sync.WaitGroup
 
 	// global context and cleanup functions
-	globalCtx          context.Context
-	cleanupFuncs       []func(context.Context) error
+	globalCtx    context.Context
+	cleanupFuncs []func(context.Context) error
+	// bgCancel cancels the context passed to the fire-and-forget
+	// goroutines launched from New (update check, MCP init, LSP tracking);
+	// bgWG tracks them so Shutdown can join them before closing the DB.
+	bgCancel           context.CancelFunc
+	bgWG               sync.WaitGroup
 	agentNotifications *pubsub.Broker[notify.Notification]
 	// runCompletions is the authoritative per-run completion signal,
 	// emitted once per top-level agent turn after all message
@@ -134,10 +139,16 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		slog.Warn("Clipboard initialization failed", "error", err)
 	}
 
-	// Check for updates in the background.
-	go app.checkForUpdates(ctx)
+	// Background goroutines run on a cancelable context so Shutdown can
+	// stop and join them (see goBackground / Shutdown) rather than leaking
+	// them past teardown.
+	bgCtx, bgCancel := context.WithCancel(ctx)
+	app.bgCancel = bgCancel
 
-	go mcp.Initialize(ctx, app.Permissions, store)
+	// Check for updates in the background.
+	app.goBackground(func() { app.checkForUpdates(bgCtx) })
+
+	app.goBackground(func() { mcp.Initialize(bgCtx, app.Permissions, store) })
 
 	// Start herdr integration when running inside a herdr pane.
 	app.herdrClient = herdr.Init()
@@ -175,9 +186,20 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		client.SetDiagnosticsCallback(updateLSPDiagnostics)
 		updateLSPState(name, client.GetServerState(), nil, client, 0)
 	})
-	go app.LSPManager.TrackConfigured()
+	app.goBackground(app.LSPManager.TrackConfigured)
 
 	return app, nil
+}
+
+// goBackground runs fn in a goroutine tracked by bgWG so Shutdown can join
+// it. Callers whose work is cancelable should close over the app's
+// background context (see New) so bgCancel actually interrupts them.
+func (app *App) goBackground(fn func()) {
+	app.bgWG.Add(1)
+	go func() {
+		defer app.bgWG.Done()
+		fn()
+	}()
 }
 
 // Config returns the pure-data configuration.
@@ -690,6 +712,24 @@ func (app *App) Shutdown() {
 		if err := app.Messages.FlushAll(shutdownCtx); err != nil {
 			slog.Error("Failed to flush pending message updates on shutdown", "error", err)
 		}
+	}
+
+	// Cancel and join the fire-and-forget goroutines from New before the
+	// DB/MCP cleanup below, so none keep touching a closing store, DB, or
+	// MCP registry. Bounded by shutdownCtx so a goroutine that ignores
+	// cancellation can't hang shutdown.
+	if app.bgCancel != nil {
+		app.bgCancel()
+	}
+	bgJoined := make(chan struct{})
+	go func() {
+		app.bgWG.Wait()
+		close(bgJoined)
+	}()
+	select {
+	case <-bgJoined:
+	case <-shutdownCtx.Done():
+		slog.Warn("Timed out waiting for background goroutines on shutdown")
 	}
 
 	// Now run remaining cleanup tasks in parallel.
