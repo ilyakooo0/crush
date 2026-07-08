@@ -1,7 +1,6 @@
 package model
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -71,7 +70,7 @@ type SessionFile struct {
 // UI never blocks on the call.
 func (m *UI) loadSession(sessionID string) tea.Cmd {
 	load := func() tea.Msg {
-		session, err := m.com.Workspace.GetSession(context.Background(), sessionID)
+		session, err := m.com.Workspace.GetSession(m.ctx, sessionID)
 		if err != nil {
 			return util.ReportError(err)
 		}
@@ -81,7 +80,7 @@ func (m *UI) loadSession(sessionID string) tea.Cmd {
 			return util.ReportError(err)
 		}
 
-		readFiles, err := m.com.Workspace.FileTrackerListReadFiles(context.Background(), sessionID)
+		readFiles, err := m.com.Workspace.FileTrackerListReadFiles(m.ctx, sessionID)
 		if err != nil {
 			slog.Error("Failed to load read files for session", "error", err)
 		}
@@ -102,7 +101,7 @@ func (m *UI) loadSession(sessionID string) tea.Cmd {
 // state.
 func (m *UI) reportCurrentSession(sessionID string) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.com.Workspace.SetCurrentSession(context.Background(), sessionID); err != nil {
+		if err := m.com.Workspace.SetCurrentSession(m.ctx, sessionID); err != nil {
 			slog.Debug("Failed to report current session", "session_id", sessionID, "error", err)
 		}
 		return nil
@@ -110,7 +109,7 @@ func (m *UI) reportCurrentSession(sessionID string) tea.Cmd {
 }
 
 func (m *UI) loadSessionFiles(sessionID string) ([]SessionFile, error) {
-	files, err := m.com.Workspace.ListSessionHistory(context.Background(), sessionID)
+	files, err := m.com.Workspace.ListSessionHistory(m.ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +263,7 @@ func (m *UI) startLSPs(paths []string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx := m.ctx
 		for _, path := range paths {
 			m.com.Workspace.LSPStart(ctx, path)
 		}

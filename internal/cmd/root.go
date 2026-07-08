@@ -124,7 +124,7 @@ crush --continue
 		event.AppInitialized()
 
 		com := common.DefaultCommon(ws)
-		model := ui.New(com, sessionID, continueLast)
+		model := ui.New(cmd.Context(), com, sessionID, continueLast)
 
 		inputFilter := ui.NewFilter()
 		var env uv.Environ = os.Environ()

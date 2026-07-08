@@ -1,7 +1,6 @@
 package model
 
 import (
-	"context"
 	"log/slog"
 	"strings"
 
@@ -18,7 +17,7 @@ type promptHistoryLoadedMsg struct {
 // loadPromptHistory loads user messages for history navigation.
 func (m *UI) loadPromptHistory() tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx := m.ctx
 		var messages []message.Message
 		var err error
 

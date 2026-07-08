@@ -176,6 +176,10 @@ type (
 
 // UI represents the main user interface model.
 type UI struct {
+	// ctx is the program's lifecycle context (cancelled on SIGINT / program
+	// exit). Async workspace operations launched from tea.Cmd closures use
+	// it so they can be cancelled at teardown instead of orphaning.
+	ctx          context.Context
 	com          *common.Common
 	session      *session.Session
 	sessionFiles []SessionFile
@@ -362,7 +366,7 @@ type UI struct {
 }
 
 // New creates a new instance of the [UI] model.
-func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
+func New(ctx context.Context, com *common.Common, initialSessionID string, continueLast bool) *UI {
 	// Editor components
 	ta := textarea.New()
 	ta.SetStyles(com.Styles.Editor.Textarea)
@@ -413,6 +417,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 	header := newHeader(com)
 
 	ui := &UI{
+		ctx:                 ctx,
 		com:                 com,
 		dialog:              dialog.NewOverlay(),
 		keyMap:              keyMap,
@@ -515,7 +520,7 @@ func (m *UI) loadInitialSession() tea.Cmd {
 		return m.loadSession(m.initialSessionID)
 	case m.continueLastSession:
 		return func() tea.Msg {
-			sessions, err := m.com.Workspace.ListSessions(context.Background())
+			sessions, err := m.com.Workspace.ListSessions(m.ctx)
 			if err != nil || len(sessions) == 0 {
 				return nil
 			}
@@ -627,7 +632,7 @@ func (m *UI) loadCustomCommands() tea.Cmd {
 			slog.Error("Failed to load custom commands", "error", err)
 		}
 		// Append user-invocable skills as commands.
-		skillEntries, err := m.com.Workspace.ListSkills(context.Background())
+		skillEntries, err := m.com.Workspace.ListSkills(m.ctx)
 		if err != nil {
 			slog.Error("Failed to load skill commands", "error", err)
 		}
@@ -688,7 +693,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.sessionFiles = msg.files
 		cmds = append(cmds, m.startLSPs(msg.lspFilePaths()))
-		msgs, err := m.com.Workspace.ListMessages(context.Background(), m.session.ID)
+		msgs, err := m.com.Workspace.ListMessages(m.ctx, m.session.ID)
 		if err != nil {
 			cmds = append(cmds, util.ReportError(err))
 			break
@@ -1262,7 +1267,7 @@ func (m *UI) loadNestedToolCalls(items []chat.MessageItem) {
 		agentSessionID := m.com.Workspace.CreateAgentToolSessionID(messageID, tc.ID)
 
 		// Fetch nested messages.
-		nestedMsgs, err := m.com.Workspace.ListMessages(context.Background(), agentSessionID)
+		nestedMsgs, err := m.com.Workspace.ListMessages(m.ctx, agentSessionID)
 		if err != nil || len(nestedMsgs) == 0 {
 			continue
 		}
@@ -1647,7 +1652,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			break
 		}
 		cmds = append(cmds, func() tea.Msg {
-			err := m.com.Workspace.AgentSummarize(context.Background(), msg.SessionID)
+			err := m.com.Workspace.AgentSummarize(m.ctx, msg.SessionID)
 			if err != nil {
 				return util.ReportError(err)()
 			}
@@ -1693,7 +1698,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			if err := m.com.Workspace.UpdatePreferredModel(config.ScopeGlobal, agentCfg.Model, currentModel); err != nil {
 				return util.ReportError(err)()
 			}
-			if err := m.com.Workspace.UpdateAgentModel(context.TODO()); err != nil {
+			if err := m.com.Workspace.UpdateAgentModel(m.ctx); err != nil {
 				slog.Warn("failed to update agent model", "error", err)
 			}
 			status := "disabled"
@@ -1770,7 +1775,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		}
 
 		cmds = append(cmds, func() tea.Msg {
-			if err := m.com.Workspace.UpdateAgentModel(context.TODO()); err != nil {
+			if err := m.com.Workspace.UpdateAgentModel(m.ctx); err != nil {
 				slog.Warn("failed to update agent model", "error", err)
 			}
 			return util.NewInfoMsg("Reasoning effort set to " + msg.Effort)
@@ -1863,7 +1868,7 @@ func substituteArgs(content string, args map[string]string) string {
 // OAuth dialog opens.
 func (m *UI) refreshHyperAndRetrySelect(msg dialog.ActionSelectModel) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
 		defer cancel()
 		if err := m.com.Workspace.RefreshOAuthToken(ctx, config.ScopeGlobal, "hyper"); err != nil {
 			slog.Warn("Hyper OAuth refresh failed, requesting re-auth", "error", err)
@@ -1898,7 +1903,7 @@ func (m *UI) fetchHyperCredits() tea.Cmd {
 		}
 
 		if providerCfg.OAuthToken != nil && providerCfg.OAuthToken.IsExpired() {
-			ctxRefresh, cancelRefresh := context.WithTimeout(context.Background(), 15*time.Second)
+			ctxRefresh, cancelRefresh := context.WithTimeout(m.ctx, 15*time.Second)
 			defer cancelRefresh()
 			if err := m.com.Workspace.RefreshOAuthToken(ctxRefresh, config.ScopeGlobal, hyper.Name); err != nil {
 				slog.Warn("Hyper OAuth refresh failed before fetching credits, trying with existing token", "error", err)
@@ -1907,7 +1912,7 @@ func (m *UI) fetchHyperCredits() tea.Cmd {
 			}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
 		credits, err := hyper.FetchCredits(ctx, apiKey)
 		if err != nil {
@@ -1983,7 +1988,7 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 	}
 
 	cmds = append(cmds, func() tea.Msg {
-		if err := m.com.Workspace.UpdateAgentModel(context.TODO()); err != nil {
+		if err := m.com.Workspace.UpdateAgentModel(m.ctx); err != nil {
 			return util.ReportError(err)
 		}
 
@@ -2006,7 +2011,7 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 	if isOnboarding {
 		m.setState(uiLanding, uiFocusEditor)
 		m.com.Config().SetupAgents()
-		if err := m.com.Workspace.InitCoderAgent(context.TODO()); err != nil {
+		if err := m.com.Workspace.InitCoderAgent(m.ctx); err != nil {
 			cmds = append(cmds, util.ReportError(err))
 		}
 	} else if m.com.IsHyper() {
@@ -3382,7 +3387,7 @@ func (m *UI) insertFileCompletion(path string) tea.Cmd {
 
 		if m.hasSession() {
 			// Skip attachment if file was already read and hasn't been modified.
-			lastRead := m.com.Workspace.FileTrackerLastReadTime(context.Background(), m.session.ID, absPath)
+			lastRead := m.com.Workspace.FileTrackerLastReadTime(m.ctx, m.session.ID, absPath)
 			if !lastRead.IsZero() {
 				if info, err := os.Stat(path); err == nil && !info.ModTime().After(lastRead) {
 					return nil
@@ -3424,7 +3429,7 @@ func (m *UI) insertMCPResourceCompletion(item completions.ResourceCompletionValu
 
 	resourceCmd := func() tea.Msg {
 		contents, err := m.com.Workspace.ReadMCPResource(
-			context.Background(),
+			m.ctx,
 			item.MCPName,
 			item.URI,
 		)
@@ -3633,7 +3638,7 @@ func (m *UI) refreshStyles() {
 // return one.
 func (m *UI) attachSkill(skillID, name string) tea.Cmd {
 	return func() tea.Msg {
-		content, result, err := m.com.Workspace.ReadSkill(context.Background(), skillID)
+		content, result, err := m.com.Workspace.ReadSkill(m.ctx, skillID)
 		if err != nil {
 			return util.NewErrorMsg(err)
 		}
@@ -3658,7 +3663,7 @@ func (m *UI) sendMessage(content string, attachments ...message.Attachment) tea.
 
 	var cmds []tea.Cmd
 	if !m.hasSession() {
-		newSession, err := m.com.Workspace.CreateSession(context.Background(), "New Session")
+		newSession, err := m.com.Workspace.CreateSession(m.ctx, "New Session")
 		if err != nil {
 			return util.ReportError(err)
 		}
@@ -3672,7 +3677,7 @@ func (m *UI) sendMessage(content string, attachments ...message.Attachment) tea.
 		m.setState(uiChat, m.focus)
 	}
 
-	ctx := context.Background()
+	ctx := m.ctx
 	cmds = append(cmds, func() tea.Msg {
 		for _, path := range m.sessionFileReads {
 			m.com.Workspace.FileTrackerRecordRead(ctx, m.session.ID, path)
@@ -3688,7 +3693,7 @@ func (m *UI) sendMessage(content string, attachments ...message.Attachment) tea.
 		// been accepted (HTTP 202) or synchronously with a validation
 		// or transport error. Run failures and cancellation surface
 		// through SSE-derived events, not this return value.
-		err := m.com.Workspace.AgentRun(context.Background(), sessionID, content, attachments...)
+		err := m.com.Workspace.AgentRun(m.ctx, sessionID, content, attachments...)
 		if err != nil {
 			return util.InfoMsg{
 				Type: util.InfoTypeError,
@@ -3712,7 +3717,7 @@ func (m *UI) runShellCommand(command string) tea.Cmd {
 func (m *UI) runShellCommandInternal(command string, isFirstMessage bool) tea.Cmd {
 	var cmds []tea.Cmd
 	if !m.hasSession() {
-		newSession, err := m.com.Workspace.CreateSession(context.Background(), "New Session")
+		newSession, err := m.com.Workspace.CreateSession(m.ctx, "New Session")
 		if err != nil {
 			return util.ReportError(err)
 		}
@@ -3765,7 +3770,7 @@ func (m *UI) runShellCommandInternal(command string, isFirstMessage bool) tea.Cm
 		return shellStreamMsg{PendingID: pendingID, Chunk: chunk, streamCh: streamCh}
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.ctx)
 	m.bangCancel = cancel
 
 	cmds = append(cmds, func() tea.Msg {
@@ -4107,7 +4112,7 @@ func (m *UI) newSession() tea.Cmd {
 	agenttools.ResetCache()
 	return tea.Batch(
 		func() tea.Msg {
-			m.com.Workspace.LSPStopAll(context.Background())
+			m.com.Workspace.LSPStopAll(m.ctx)
 			return nil
 		},
 		m.loadPromptHistory(),
@@ -4427,7 +4432,7 @@ func (m *UI) runMCPPrompt(clientID, promptID string, arguments map[string]string
 
 func (m *UI) handleStateChanged() tea.Cmd {
 	return func() tea.Msg {
-		if err := m.com.Workspace.UpdateAgentModel(context.Background()); err != nil {
+		if err := m.com.Workspace.UpdateAgentModel(m.ctx); err != nil {
 			slog.Warn("failed to update agent model", "error", err)
 		}
 		return mcpStateChangedMsg{
@@ -4470,7 +4475,7 @@ func (m *UI) copyChatHighlight() tea.Cmd {
 }
 
 func (m *UI) enableDockerMCP() tea.Msg {
-	ctx := context.Background()
+	ctx := m.ctx
 	if err := m.com.Workspace.EnableDockerMCP(ctx); err != nil {
 		return util.ReportError(err)()
 	}
