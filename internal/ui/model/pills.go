@@ -281,16 +281,16 @@ func (m *UI) pillsCacheState() string {
 	return kb.String()
 }
 
-// renderPills renders the pills panel and stores it in m.pillsView.
+// renderPills renders the pills panel and stores it in m.renderCache.pillsView.
 func (m *UI) renderPills() {
 	// Skip re-rendering when nothing that affects the output changed.
 	key := m.pillsCacheState()
-	if key == m.pillsCacheKey {
+	if key == m.renderCache.pillsCacheKey {
 		return
 	}
-	m.pillsCacheKey = key
+	m.renderCache.pillsCacheKey = key
 
-	m.pillsView = ""
+	m.renderCache.pillsView = ""
 	if !m.hasSession() {
 		return
 	}
@@ -359,5 +359,5 @@ func (m *UI) renderPills() {
 		pillsArea = lipgloss.JoinVertical(lipgloss.Left, pillsRow, expandedList)
 	}
 
-	m.pillsView = t.Pills.Area.MaxWidth(width).PaddingLeft(paddingLeft).Render(pillsArea)
+	m.renderCache.pillsView = t.Pills.Area.MaxWidth(width).PaddingLeft(paddingLeft).Render(pillsArea)
 }

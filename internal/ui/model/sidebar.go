@@ -140,7 +140,7 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle, skillItems []skillStatusItem,
 	// sidebar render cache is consulted), so the reflection-based arg boxing
 	// fmt.Fprintf performs was pure per-frame allocation churn. Appending to
 	// a retained buffer and hashing it once is allocation-free after warmup.
-	b := m.sidebarFPBuf[:0]
+	b := m.renderCache.sidebarFPBuf[:0]
 	putInt := func(k string, v int64) { b = append(b, k...); b = strconv.AppendInt(b, v, 10) }
 	putStr := func(k, v string) { b = append(b, k...); b = append(b, v...) }
 	putBool := func(k string, v bool) { b = append(b, k...); b = strconv.AppendBool(b, v) }
@@ -248,7 +248,7 @@ func (m *UI) sidebarFingerprint(area uv.Rectangle, skillItems []skillStatusItem,
 		b = append(b, ';')
 	}
 
-	m.sidebarFPBuf = b // retain the grown buffer for reuse next frame
+	m.renderCache.sidebarFPBuf = b // retain the grown buffer for reuse next frame
 	h := fnv.New64a()
 	h.Write(b)
 	return h.Sum64()
@@ -277,13 +277,13 @@ func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
 	mcpSorted := m.com.Config().MCP.Sorted()
 
 	key := m.sidebarFingerprint(area, skillItems, mcpSorted)
-	if !m.hasSidebarCache || key != m.sidebarCacheKey {
-		m.sidebarView = m.buildSidebar(area, skillItems, mcpSorted)
-		m.sidebarCacheKey = key
-		m.hasSidebarCache = true
+	if !m.renderCache.hasSidebarCache || key != m.renderCache.sidebarCacheKey {
+		m.renderCache.sidebarView = m.buildSidebar(area, skillItems, mcpSorted)
+		m.renderCache.sidebarCacheKey = key
+		m.renderCache.hasSidebarCache = true
 	}
 
-	uv.NewStyledString(m.sidebarView).Draw(scr, area)
+	uv.NewStyledString(m.renderCache.sidebarView).Draw(scr, area)
 }
 
 // buildSidebar renders the sidebar content block as a string. skillItems

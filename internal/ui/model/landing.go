@@ -23,16 +23,16 @@ import (
 // frame.
 func (m *UI) selectedLargeModel() *workspace.AgentModel {
 	key := m.largeModelConfigKey()
-	if m.largeModel != nil && key == m.largeModelCacheKey {
-		return m.largeModel
+	if m.renderCache.largeModel != nil && key == m.renderCache.largeModelCacheKey {
+		return m.renderCache.largeModel
 	}
-	m.largeModelCacheKey = key
+	m.renderCache.largeModelCacheKey = key
 	if m.com.Workspace.AgentIsReady() {
 		model := m.com.Workspace.AgentModel()
-		m.largeModel = &model
-		return m.largeModel
+		m.renderCache.largeModel = &model
+		return m.renderCache.largeModel
 	}
-	m.largeModel = nil
+	m.renderCache.largeModel = nil
 	return nil
 }
 

@@ -175,6 +175,33 @@ type (
 )
 
 // UI represents the main user interface model.
+// renderCache holds the per-frame render memoization the UI consults on
+// every draw: the sidebar block (drawSidebar re-renders fully each frame),
+// the resolved large model (an RPC in client mode), and the pills block.
+// Grouped out of the UI struct so the memoization layer is separable from
+// model state.
+type renderCache struct {
+	// sidebarView is the memoized sidebar block, keyed by sidebarCacheKey
+	// (a fingerprint of every input affecting its output).
+	sidebarView     string
+	sidebarCacheKey uint64
+	hasSidebarCache bool
+	// sidebarFPBuf is a scratch buffer reused across frames to build the
+	// sidebar fingerprint without allocating (see sidebarFingerprint).
+	sidebarFPBuf []byte
+
+	// largeModel caches the resolved selected large model — resolving it
+	// hits the agent coordinator (an RPC in client mode) — keyed by
+	// largeModelCacheKey. A nil result is never cached so the
+	// not-ready → ready transition is picked up on the next frame.
+	largeModel         *workspace.AgentModel
+	largeModelCacheKey string
+
+	// pillsView is the memoized pills block, keyed by pillsCacheKey.
+	pillsView     string
+	pillsCacheKey string
+}
+
 type UI struct {
 	// ctx is the program's lifecycle context (cancelled on SIGINT / program
 	// exit). Async workspace operations launched from tea.Cmd closures use
@@ -299,25 +326,9 @@ type UI struct {
 	// sidebarLogo keeps a cached version of the sidebar sidebarLogo.
 	sidebarLogo string
 
-	// sidebar render cache: drawSidebar fully re-renders every frame, so we
-	// memoize the rendered block keyed by a fingerprint of every input that
-	// affects its output.
-	sidebarView     string
-	sidebarCacheKey uint64
-	hasSidebarCache bool
-	// sidebarFPBuf is a scratch buffer reused across frames to build the
-	// sidebar fingerprint without allocating (see sidebarFingerprint).
-	sidebarFPBuf []byte
-
-	// selectedLargeModel cache: resolving the selected large model hits
-	// the agent coordinator, which is an RPC (AgentIsReady + AgentModel)
-	// in client mode. Because the sidebar fingerprint runs every frame we
-	// cache the resolved model keyed by a cheap, locally-cached config
-	// fingerprint and only re-fetch when that changes. A nil result is
-	// never cached so the not-ready → ready transition is picked up on
-	// the next frame.
-	largeModel         *workspace.AgentModel
-	largeModelCacheKey string
+	// renderCache holds the per-frame render memoization (sidebar, pills,
+	// and resolved large-model caches); see the renderCache type.
+	renderCache renderCache
 
 	// Notification state
 	notifyBackend       notification.Backend
@@ -341,11 +352,6 @@ type UI struct {
 	pillsAutoExpanded  bool
 	focusedPillSection pillSection
 	promptQueue        int
-	pillsView          string
-	// pillsCacheKey fingerprints the inputs used to build pillsView so
-	// renderPills can skip re-rendering (and recomputing the queue
-	// gradient) when nothing that affects the output has changed.
-	pillsCacheKey string
 
 	// Todo spinner
 	todoSpinner    spinner.Model
@@ -2552,8 +2558,8 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 		}
 
 		m.chat.Draw(scr, layout.main)
-		if layout.pills.Dy() > 0 && m.pillsView != "" {
-			uv.NewStyledString(m.pillsView).Draw(scr, layout.pills)
+		if layout.pills.Dy() > 0 && m.renderCache.pillsView != "" {
+			uv.NewStyledString(m.renderCache.pillsView).Draw(scr, layout.pills)
 		}
 
 		editorWidth := scr.Bounds().Dx()
@@ -4105,9 +4111,9 @@ func (m *UI) newSession() tea.Cmd {
 	m.pillsExpanded = false
 	m.pillsAutoExpanded = false
 	m.promptQueue = 0
-	m.pillsView = ""
-	m.pillsCacheKey = ""
-	m.hasSidebarCache = false
+	m.renderCache.pillsView = ""
+	m.renderCache.pillsCacheKey = ""
+	m.renderCache.hasSidebarCache = false
 	m.historyReset()
 	agenttools.ResetCache()
 	return tea.Batch(
