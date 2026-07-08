@@ -381,6 +381,9 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 
 	if replaceAll {
 		newContent = strings.ReplaceAll(oldContent, oldString, newString)
+		if newContent == oldContent {
+			return oldStringNotFoundErr, nil
+		}
 	} else {
 		index := strings.Index(oldContent, oldString)
 		if index == -1 {

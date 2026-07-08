@@ -206,8 +206,9 @@ func (s *Session) HandleMsg(msg tea.Msg) Action {
 				s.list.ScrollToSelected()
 			case key.Matches(msg, s.keyMap.Select):
 				if item := s.list.SelectedItem(); item != nil {
-					sessionItem := item.(*SessionItem)
-					return ActionSelectSession{sessionItem.Session}
+					if sessionItem, ok := item.(*SessionItem); ok {
+						return ActionSelectSession{sessionItem.Session}
+					}
 				}
 			default:
 				var cmd tea.Cmd
@@ -329,7 +330,9 @@ func (s *Session) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 
 func (s *Session) selectedSessionItem() *SessionItem {
 	if item := s.list.SelectedItem(); item != nil {
-		return item.(*SessionItem)
+		if sessionItem, ok := item.(*SessionItem); ok {
+			return sessionItem
+		}
 	}
 	return nil
 }
