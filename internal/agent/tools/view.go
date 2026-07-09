@@ -204,7 +204,7 @@ func NewViewTool(
 			isSupportedImage, mimeType := getImageMimeType(filePath)
 			if isSupportedImage {
 				if fileInfo.Size() > MaxViewSize {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("Image file is too large (%d bytes). Maximum size is %d bytes",
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("image file is too large (%d bytes). Maximum size is %d bytes",
 						fileInfo.Size(), MaxViewSize)), nil
 				}
 				if !GetSupportsImagesFromContext(ctx) {
