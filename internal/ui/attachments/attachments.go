@@ -132,8 +132,8 @@ func (r *Renderer) Render(attachments []message.Attachment, deleting bool, width
 			)
 		}
 
-		if i == fits && len(attachments) > i {
-			chips = append(chips, lipgloss.NewStyle().Width(maxItemWidth).Render(fmt.Sprintf("%d more…", len(attachments)-fits)))
+		if i == fits && len(attachments) > i+1 {
+			chips = append(chips, lipgloss.NewStyle().Width(maxItemWidth).Render(fmt.Sprintf("%d more…", len(attachments)-fits-1)))
 			break
 		}
 	}
