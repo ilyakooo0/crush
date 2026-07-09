@@ -370,9 +370,9 @@ func (c *Commands) defaultCommands() []*CommandItem {
 
 	// Add external editor command if $EDITOR is available.
 	//
-	// TODO: Use [tea.EnvMsg] to get environment variable instead of os.Getenv;
-	// because os.Getenv does IO is breaks the TEA paradigm and is generally an
-	// antipattern.
+	// TODO: Use [tea.EnvMsg] to get environment variables instead of os.Getenv;
+	// reading the environment directly bypasses the TEA message system and is
+	// generally an antipattern.
 	if os.Getenv("EDITOR") != "" {
 		commands = append(commands, NewCommandItem(c.com.Styles, "open_external_editor", "Open External Editor", "ctrl+o", ActionExternalEditor{}))
 	}
