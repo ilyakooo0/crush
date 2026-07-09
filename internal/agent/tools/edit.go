@@ -352,7 +352,7 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 
 	sessionID := GetSessionFromContext(edit.ctx)
 	if sessionID == "" {
-		return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for edit a file")
+		return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for editing a file")
 	}
 
 	lastRead := edit.filetracker.LastReadTime(edit.ctx, sessionID, filePath)
