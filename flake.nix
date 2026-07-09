@@ -22,7 +22,7 @@
 
           src = ./.;
 
-          vendorHash = "sha256-4gHvyEqiFhEvZ90lJbXeI/1fMMo6L19P/PD5Eu5YUmI=";
+          vendorHash = null;
 
           # Match the Go toolchain used in the dev shell.
           go = pkgs.go_1_26;
