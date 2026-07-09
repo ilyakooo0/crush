@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/ui/anim"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/difftastic"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/x/ansi"
@@ -57,6 +58,7 @@ type ToolMessageItem interface {
 	SetMessageID(id string)
 	SetStatus(status ToolStatus)
 	Status() ToolStatus
+	SetDiffTool(tool string)
 }
 
 // Compactable is an interface for tool items that can render in a compacted mode.
@@ -103,6 +105,10 @@ type ToolRenderOpts struct {
 	Compact         bool
 	IsSpinning      bool
 	Status          ToolStatus
+	// DiffTool selects the external diff renderer for edit/multi-edit diffs.
+	// "builtin" (the default) uses the in-process renderer; "difftastic"
+	// shells out to the difft binary.
+	DiffTool string
 }
 
 // IsPending returns true if the tool call is still pending (not finished and
@@ -163,6 +169,8 @@ type baseToolMessageItem struct {
 	sty             *styles.Styles
 	anim            *anim.Anim
 	expandedContent bool
+	// diffTool selects the external diff renderer for edit/multi-edit diffs.
+	diffTool string
 }
 
 var _ Expandable = (*baseToolMessageItem)(nil)
@@ -174,6 +182,7 @@ func newBaseToolMessageItem(
 	result *message.ToolResult,
 	toolRenderer ToolRenderer,
 	canceled bool,
+	diffTool string,
 ) *baseToolMessageItem {
 	// we only do full width for diffs (as far as I know)
 	hasCappedWidth := toolCall.Name != tools.EditToolName && toolCall.Name != tools.MultiEditToolName
@@ -195,6 +204,7 @@ func newBaseToolMessageItem(
 		result:                   result,
 		status:                   status,
 		hasCappedWidth:           hasCappedWidth,
+		diffTool:                 diffTool,
 	}
 	t.anim = anim.New(anim.Settings{
 		ID:          toolCall.ID,
@@ -219,6 +229,7 @@ func NewToolMessageItem(
 	toolCall message.ToolCall,
 	result *message.ToolResult,
 	canceled bool,
+	diffTool string,
 ) ToolMessageItem {
 	var item ToolMessageItem
 	switch toolCall.Name {
@@ -273,6 +284,7 @@ func NewToolMessageItem(
 			item = NewGenericToolMessageItem(sty, toolCall, result, canceled)
 		}
 	}
+	item.SetDiffTool(diffTool)
 	item.SetMessageID(messageID)
 	return item
 }
@@ -283,6 +295,16 @@ func (t *baseToolMessageItem) SetCompact(compact bool) {
 		return
 	}
 	t.isCompact = compact
+	t.clearCache()
+	t.Bump()
+}
+
+// SetDiffTool sets the external diff tool preference and invalidates the cache.
+func (t *baseToolMessageItem) SetDiffTool(tool string) {
+	if t.diffTool == tool {
+		return
+	}
+	t.diffTool = tool
 	t.clearCache()
 	t.Bump()
 }
@@ -338,6 +360,7 @@ func (t *baseToolMessageItem) RawRender(width int) string {
 			Compact:         t.isCompact,
 			IsSpinning:      t.isSpinning(),
 			Status:          t.computeStatus(),
+			DiffTool:        t.diffTool,
 		})
 
 		// Prepend hook indicator if hooks ran for this tool call.
@@ -985,8 +1008,15 @@ func formatSize(bytes int) string {
 }
 
 // toolOutputDiffContent renders a diff between old and new content.
-func toolOutputDiffContent(sty *styles.Styles, file, oldContent, newContent string, width int, expanded bool) string {
+func toolOutputDiffContent(sty *styles.Styles, file, oldContent, newContent string, width int, expanded bool, diffTool string) string {
 	bodyWidth := width - toolBodyLeftPaddingTotal
+
+	// Try difftastic if enabled. Fall back to builtin on any failure.
+	if diffTool == "difftastic" {
+		if out, err := difftastic.RenderDiff(file, oldContent, newContent, bodyWidth); err == nil && out != "" {
+			return sty.Tool.Body.Render(truncateDiff(sty, out, bodyWidth, expanded))
+		}
+	}
 
 	formatter := common.DiffFormatter(sty).
 		Before(file, oldContent).
@@ -999,22 +1029,7 @@ func toolOutputDiffContent(sty *styles.Styles, file, oldContent, newContent stri
 	}
 
 	formatted := formatter.String()
-	lines := strings.Split(formatted, "\n")
-
-	// Truncate if needed.
-	maxLines := diffContextHeight
-	if expanded {
-		maxLines = len(lines)
-	}
-
-	if len(lines) > maxLines && !expanded {
-		truncMsg := sty.Tool.DiffTruncation.
-			Width(bodyWidth).
-			Render(fmt.Sprintf(assistantMessageTruncateFormat, len(lines)-maxLines))
-		formatted = strings.Join(lines[:maxLines], "\n") + "\n" + truncMsg
-	}
-
-	return sty.Tool.Body.Render(formatted)
+	return sty.Tool.Body.Render(truncateDiff(sty, formatted, bodyWidth, expanded))
 }
 
 // formatTimeout converts timeout seconds to a duration string (e.g., "30s").
@@ -1035,8 +1050,23 @@ func formatNonZero(value int) string {
 }
 
 // toolOutputMultiEditDiffContent renders a diff with optional failed edits note.
-func toolOutputMultiEditDiffContent(sty *styles.Styles, file string, meta tools.MultiEditResponseMetadata, totalEdits, width int, expanded bool) string {
+func toolOutputMultiEditDiffContent(sty *styles.Styles, file string, meta tools.MultiEditResponseMetadata, totalEdits, width int, expanded bool, diffTool string) string {
 	bodyWidth := width - toolBodyLeftPaddingTotal
+
+	// Try difftastic if enabled. Fall back to builtin on any failure.
+	if diffTool == "difftastic" {
+		if out, err := difftastic.RenderDiff(file, meta.OldContent, meta.NewContent, bodyWidth); err == nil && out != "" {
+			formatted := truncateDiff(sty, out, bodyWidth, expanded)
+			// Add failed edits note if any exist.
+			if len(meta.EditsFailed) > 0 {
+				noteTag := sty.Tool.NoteTag.Render("Note")
+				noteMsg := fmt.Sprintf("%d of %d edits succeeded", meta.EditsApplied, totalEdits)
+				note := fmt.Sprintf("%s %s", noteTag, sty.Tool.NoteMessage.Render(noteMsg))
+				formatted = formatted + "\n\n" + note
+			}
+			return sty.Tool.Body.Render(formatted)
+		}
+	}
 
 	formatter := common.DiffFormatter(sty).
 		Before(file, meta.OldContent).
@@ -1049,20 +1079,7 @@ func toolOutputMultiEditDiffContent(sty *styles.Styles, file string, meta tools.
 	}
 
 	formatted := formatter.String()
-	lines := strings.Split(formatted, "\n")
-
-	// Truncate if needed.
-	maxLines := diffContextHeight
-	if expanded {
-		maxLines = len(lines)
-	}
-
-	if len(lines) > maxLines && !expanded {
-		truncMsg := sty.Tool.DiffTruncation.
-			Width(bodyWidth).
-			Render(fmt.Sprintf(assistantMessageTruncateFormat, len(lines)-maxLines))
-		formatted = strings.Join(lines[:maxLines], "\n") + "\n" + truncMsg
-	}
+	formatted = truncateDiff(sty, formatted, bodyWidth, expanded)
 
 	// Add failed edits note if any exist.
 	if len(meta.EditsFailed) > 0 {
@@ -1073,6 +1090,22 @@ func toolOutputMultiEditDiffContent(sty *styles.Styles, file string, meta tools.
 	}
 
 	return sty.Tool.Body.Render(formatted)
+}
+
+// truncateDiff truncates diff output to diffContextHeight lines unless expanded.
+func truncateDiff(sty *styles.Styles, content string, bodyWidth int, expanded bool) string {
+	lines := strings.Split(content, "\n")
+	maxLines := diffContextHeight
+	if expanded {
+		maxLines = len(lines)
+	}
+	if len(lines) > maxLines && !expanded {
+		truncMsg := sty.Tool.DiffTruncation.
+			Width(bodyWidth).
+			Render(fmt.Sprintf(assistantMessageTruncateFormat, len(lines)-maxLines))
+		return strings.Join(lines[:maxLines], "\n") + "\n" + truncMsg
+	}
+	return content
 }
 
 // roundedEnumerator creates a tree enumerator with rounded corners.

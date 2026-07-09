@@ -23,7 +23,7 @@ func NewReferencesToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &ReferencesToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &ReferencesToolRenderContext{}, canceled, "")
 }
 
 // ReferencesToolRenderContext renders references tool messages.

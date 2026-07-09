@@ -41,7 +41,7 @@ func looksLikeMarkdown(content string) bool {
 	return false
 }
 
-func renderToolResultTextContent(sty *styles.Styles, content string, widths toolResultContentWidths, expanded bool) string {
+func renderToolResultTextContent(sty *styles.Styles, content string, widths toolResultContentWidths, expanded bool, diffTool string) string {
 	var result json.RawMessage
 	if err := json.Unmarshal([]byte(content), &result); err == nil {
 		prettyResult, err := json.MarshalIndent(result, "", "  ")
@@ -51,7 +51,7 @@ func renderToolResultTextContent(sty *styles.Styles, content string, widths tool
 		return sty.Tool.Body.Render(toolOutputPlainContent(sty, content, widths.Body, expanded))
 	}
 	if diffdetect.IsUnifiedDiff(content) {
-		return toolOutputDiffContentFromUnified(sty, content, widths.Diff, expanded)
+		return toolOutputDiffContentFromUnified(sty, content, widths.Diff, expanded, diffTool)
 	}
 	if looksLikeMarkdown(content) {
 		return sty.Tool.Body.Render(toolOutputCodeContent(sty, "result.md", content, 0, widths.Body, expanded))

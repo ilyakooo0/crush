@@ -22,7 +22,7 @@ func NewGenericToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &GenericToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &GenericToolRenderContext{}, canceled, "")
 }
 
 // GenericToolRenderContext renders unknown/generic tool messages.
@@ -68,6 +68,6 @@ func (g *GenericToolRenderContext) RenderTool(sty *styles.Styles, width int, opt
 		return joinToolParts(header, body)
 	}
 
-	body := renderToolResultTextContent(sty, opts.Result.Content, toolResultContentWidths{Body: bodyWidth, Diff: cappedWidth}, opts.ExpandedContent)
+	body := renderToolResultTextContent(sty, opts.Result.Content, toolResultContentWidths{Body: bodyWidth, Diff: cappedWidth}, opts.ExpandedContent, opts.DiffTool)
 	return joinToolParts(header, body)
 }

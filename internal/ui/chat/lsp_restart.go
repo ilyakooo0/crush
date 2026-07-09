@@ -22,7 +22,7 @@ func NewLSPRestartToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &LSPRestartToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &LSPRestartToolRenderContext{}, canceled, "")
 }
 
 // LSPRestartToolRenderContext renders lsprestart tool messages.
