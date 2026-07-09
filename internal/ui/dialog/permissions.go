@@ -707,7 +707,7 @@ func (p *Permissions) renderViewContent(width int) string {
 	if params.Offset > 0 {
 		content += fmt.Sprintf("\nStarting from line: %d", params.Offset+1)
 	}
-	if params.Limit > 0 && params.Limit != 2000 {
+	if params.Limit > 0 && params.Limit != tools.DefaultReadLimit {
 		content += fmt.Sprintf("\nLines to read: %d", params.Limit)
 	}
 
