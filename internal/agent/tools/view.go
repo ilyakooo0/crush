@@ -209,7 +209,7 @@ func NewViewTool(
 				}
 				if !GetSupportsImagesFromContext(ctx) {
 					modelName := GetModelNameFromContext(ctx)
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("This model (%s) does not support image data.", modelName)), nil
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("this model (%s) does not support image data.", modelName)), nil
 				}
 
 				imageData, readErr := os.ReadFile(filePath)
@@ -237,13 +237,13 @@ func NewViewTool(
 			if err != nil {
 				var tooLarge contentTooLargeError
 				if errors.As(err, &tooLarge) {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("Content section is too large (%d bytes). Maximum size is %d bytes",
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("content section is too large (%d bytes). Maximum size is %d bytes",
 						tooLarge.Size, tooLarge.Max)), nil
 				}
 				return fantasy.ToolResponse{}, fmt.Errorf("error reading file: %w", err)
 			}
 			if !utf8.ValidString(content) {
-				return fantasy.NewTextErrorResponse("File content is not valid UTF-8"), nil
+				return fantasy.NewTextErrorResponse("file content is not valid UTF-8"), nil
 			}
 
 			openInLSPs(ctx, lspManager, filePath)
@@ -453,7 +453,7 @@ func readBuiltinFile(params ViewParams, skillTracker *skills.Tracker) (fantasy.T
 
 	content := string(data)
 	if !utf8.ValidString(content) {
-		return fantasy.NewTextErrorResponse("File content is not valid UTF-8"), nil
+		return fantasy.NewTextErrorResponse("file content is not valid UTF-8"), nil
 	}
 
 	limit := params.Limit

@@ -151,7 +151,7 @@ func TestViewToolBlocksOversizedReturnedSections(t *testing.T) {
 	})
 
 	require.True(t, resp.IsError)
-	require.Contains(t, resp.Content, "Content section is too large")
+	require.Contains(t, resp.Content, "content section is too large")
 }
 
 func TestViewToolBlocksOversizedImages(t *testing.T) {
@@ -169,7 +169,7 @@ func TestViewToolBlocksOversizedImages(t *testing.T) {
 	})
 
 	require.True(t, resp.IsError)
-	require.Contains(t, resp.Content, "Image file is too large")
+	require.Contains(t, resp.Content, "image file is too large")
 }
 
 func TestReadTextFileEnforcesMaxContentSize(t *testing.T) {
