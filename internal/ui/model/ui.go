@@ -3307,6 +3307,7 @@ func (m *UI) openEditor(value string) tea.Cmd {
 	tmpPath := tmpfile.Name()
 	defer tmpfile.Close()
 	if _, err := tmpfile.WriteString(value); err != nil {
+		_ = os.Remove(tmpPath)
 		return util.ReportError(err)
 	}
 	cmd, err := editor.Command(
@@ -3318,6 +3319,7 @@ func (m *UI) openEditor(value string) tea.Cmd {
 		),
 	)
 	if err != nil {
+		_ = os.Remove(tmpPath)
 		return util.ReportError(err)
 	}
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
