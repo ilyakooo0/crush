@@ -177,19 +177,19 @@ func NewViewTool(
 						}
 
 						if len(suggestions) > 0 {
-							return fantasy.NewTextErrorResponse(fmt.Sprintf("File not found: %s\n\nDid you mean one of these?\n%s",
+							return fantasy.NewTextErrorResponse(fmt.Sprintf("file not found: %s\n\nDid you mean one of these?\n%s",
 								filePath, strings.Join(suggestions, "\n"))), nil
 						}
 					}
 
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("File not found: %s", filePath)), nil
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("file not found: %s", filePath)), nil
 				}
 				return fantasy.ToolResponse{}, fmt.Errorf("error accessing file: %w", err)
 			}
 
 			// Check if it's a directory
 			if fileInfo.IsDir() {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Path is a directory, not a file: %s", filePath)), nil
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("path is a directory, not a file: %s", filePath)), nil
 			}
 
 			// Set default limit if not provided (no limit for SKILL.md files)
@@ -448,7 +448,7 @@ func readBuiltinFile(params ViewParams, skillTracker *skills.Tracker) (fantasy.T
 
 	data, err := fs.ReadFile(builtinFS, embeddedPath)
 	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("Builtin file not found: %s", params.FilePath)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("builtin file not found: %s", params.FilePath)), nil
 	}
 
 	content := string(data)

@@ -69,13 +69,13 @@ func NewWriteTool(
 			oldContent := ""
 			if err == nil {
 				if fileInfo.IsDir() {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("Path is a directory, not a file: %s", filePath)), nil
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("path is a directory, not a file: %s", filePath)), nil
 				}
 
 				modTime := fileInfo.ModTime().Truncate(time.Second)
 				lastRead := filetracker.LastReadTime(ctx, sessionID, filePath)
 				if modTime.After(lastRead) {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("File %s has been modified since it was last read.\nLast modification: %s\nLast read: %s\n\nPlease read the file again before modifying it.",
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("file %s has been modified since it was last read.\nLast modification: %s\nLast read: %s\n\nPlease read the file again before modifying it.",
 						filePath, modTime.Format(time.RFC3339), lastRead.Format(time.RFC3339))), nil
 				}
 
@@ -83,7 +83,7 @@ func NewWriteTool(
 				if readErr == nil {
 					oldContent = string(oldBytes)
 					if oldContent == params.Content {
-						return fantasy.NewTextErrorResponse(fmt.Sprintf("File %s already contains the exact content. No changes made.", filePath)), nil
+						return fantasy.NewTextErrorResponse(fmt.Sprintf("file %s already contains the exact content. No changes made.", filePath)), nil
 					}
 				}
 			} else if !os.IsNotExist(err) {
