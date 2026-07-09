@@ -57,7 +57,7 @@ func NewAgentToolMessageItem(
 	canceled bool,
 ) *AgentToolMessageItem {
 	t := &AgentToolMessageItem{}
-	t.baseToolMessageItem = newBaseToolMessageItem(sty, toolCall, result, &AgentToolRenderContext{agent: t}, canceled)
+	t.baseToolMessageItem = newBaseToolMessageItem(sty, toolCall, result, &AgentToolRenderContext{agent: t}, canceled, "")
 	// For the agent tool we keep spinning until the tool call is finished.
 	t.spinningFunc = func(state SpinningState) bool {
 		return !state.HasResult() && !state.IsCanceled()
@@ -238,7 +238,7 @@ func NewAgenticFetchToolMessageItem(
 	canceled bool,
 ) *AgenticFetchToolMessageItem {
 	t := &AgenticFetchToolMessageItem{}
-	t.baseToolMessageItem = newBaseToolMessageItem(sty, toolCall, result, &AgenticFetchToolRenderContext{fetch: t}, canceled)
+	t.baseToolMessageItem = newBaseToolMessageItem(sty, toolCall, result, &AgenticFetchToolRenderContext{fetch: t}, canceled, "")
 	// For the agentic fetch tool we keep spinning until the tool call is finished.
 	t.spinningFunc = func(state SpinningState) bool {
 		return !state.HasResult() && !state.IsCanceled()

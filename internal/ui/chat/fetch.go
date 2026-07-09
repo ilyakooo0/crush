@@ -26,7 +26,7 @@ func NewFetchToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &FetchToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &FetchToolRenderContext{}, canceled, "")
 }
 
 // FetchToolRenderContext renders fetch tool messages.
@@ -101,7 +101,7 @@ func NewWebFetchToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &WebFetchToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &WebFetchToolRenderContext{}, canceled, "")
 }
 
 // WebFetchToolRenderContext renders web_fetch tool messages.
@@ -155,7 +155,7 @@ func NewWebSearchToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &WebSearchToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &WebSearchToolRenderContext{}, canceled, "")
 }
 
 // WebSearchToolRenderContext renders web_search tool messages.

@@ -1,11 +1,11 @@
 package chat
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/crush/internal/diffdetect"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/difftastic"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 )
 
@@ -130,13 +130,23 @@ func parseUnifiedDiff(content string) []parsedDiffFile {
 	return result
 }
 
-func toolOutputDiffContentFromUnified(sty *styles.Styles, content string, width int, expanded bool) string {
+func toolOutputDiffContentFromUnified(sty *styles.Styles, content string, width int, expanded bool, diffTool string) string {
 	files := parseUnifiedDiff(content)
 	if len(files) == 0 {
 		bodyWidth := width - toolBodyLeftPaddingTotal
 		return sty.Tool.Body.Render(toolOutputCodeContent(sty, "result.diff", content, 0, bodyWidth, expanded))
 	}
 	bodyWidth := width - toolBodyLeftPaddingTotal
+
+	// Try difftastic if enabled and there's a single file diff. Fall back to
+	// builtin on any failure or when multiple files are involved.
+	if diffTool == "difftastic" && len(files) == 1 {
+		f := files[0]
+		if out, err := difftastic.RenderDiff(f.path, f.before, f.after, bodyWidth); err == nil && out != "" {
+			return sty.Tool.Body.Render(truncateDiff(sty, out, bodyWidth, expanded))
+		}
+	}
+
 	var blocks []string
 	for i, f := range files {
 		formatter := common.DiffFormatter(sty).
@@ -156,16 +166,5 @@ func toolOutputDiffContentFromUnified(sty *styles.Styles, content string, width 
 		blocks = append(blocks, formatted)
 	}
 	combined := strings.Join(blocks, "\n")
-	lines := strings.Split(combined, "\n")
-	maxLines := diffContextHeight
-	if expanded {
-		maxLines = len(lines)
-	}
-	if len(lines) > maxLines && !expanded {
-		truncMsg := sty.Tool.DiffTruncation.
-			Width(bodyWidth).
-			Render(fmt.Sprintf(assistantMessageTruncateFormat, len(lines)-maxLines))
-		combined = strings.Join(lines[:maxLines], "\n") + "\n" + truncMsg
-	}
-	return sty.Tool.Body.Render(combined)
+	return sty.Tool.Body.Render(truncateDiff(sty, combined, bodyWidth, expanded))
 }

@@ -28,7 +28,7 @@ func NewDockerMCPToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &DockerMCPToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &DockerMCPToolRenderContext{}, canceled, "")
 }
 
 // DockerMCPToolRenderContext renders Docker MCP tool messages.
@@ -138,7 +138,7 @@ func (d *DockerMCPToolRenderContext) RenderTool(sty *styles.Styles, width int, o
 
 	// Handle text content.
 	if opts.Result.Content != "" {
-		body := renderToolResultTextContent(sty, opts.Result.Content, toolResultContentWidths{Body: bodyWidth, Diff: cappedWidth}, opts.ExpandedContent)
+		body := renderToolResultTextContent(sty, opts.Result.Content, toolResultContentWidths{Body: bodyWidth, Diff: cappedWidth}, opts.ExpandedContent, opts.DiffTool)
 		parts = append(parts, body)
 	}
 

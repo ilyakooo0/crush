@@ -23,7 +23,7 @@ func NewMCPToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &MCPToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &MCPToolRenderContext{}, canceled, "")
 }
 
 // MCPToolRenderContext renders bash tool messages.
@@ -73,6 +73,6 @@ func (b *MCPToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *T
 	}
 
 	bodyWidth := cappedWidth - toolBodyLeftPaddingTotal
-	body := renderToolResultTextContent(sty, opts.Result.Content, toolResultContentWidths{Body: bodyWidth, Diff: cappedWidth}, opts.ExpandedContent)
+	body := renderToolResultTextContent(sty, opts.Result.Content, toolResultContentWidths{Body: bodyWidth, Diff: cappedWidth}, opts.ExpandedContent, opts.DiffTool)
 	return joinToolParts(header, body)
 }

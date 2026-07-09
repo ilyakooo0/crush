@@ -31,7 +31,7 @@ func NewTodosToolMessageItem(
 	result *message.ToolResult,
 	canceled bool,
 ) ToolMessageItem {
-	return newBaseToolMessageItem(sty, toolCall, result, &TodosToolRenderContext{}, canceled)
+	return newBaseToolMessageItem(sty, toolCall, result, &TodosToolRenderContext{}, canceled, "")
 }
 
 // TodosToolRenderContext renders todos tool messages.

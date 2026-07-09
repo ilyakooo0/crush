@@ -221,6 +221,7 @@ type LSPConfig struct {
 type TUIOptions struct {
 	CompactMode bool   `json:"compact_mode,omitempty" jsonschema:"description=Enable compact mode for the TUI interface,default=false"`
 	DiffMode    string `json:"diff_mode,omitempty" jsonschema:"description=Diff mode for the TUI interface,enum=unified,enum=split"`
+	DiffTool    string `json:"diff_tool,omitempty" jsonschema:"description=External diff tool for edit diffs in the TUI,enum=builtin,enum=difftastic,default=builtin"`
 	// Theme selects the TUI color scheme. "auto" (the default) picks light
 	// or dark based on the detected terminal background; "dark"/"light"
 	// force a specific scheme.
