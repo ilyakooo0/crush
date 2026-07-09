@@ -66,6 +66,7 @@ func NewWriteTool(
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
 
 			fileInfo, err := os.Stat(filePath)
+			oldContent := ""
 			if err == nil {
 				if fileInfo.IsDir() {
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("Path is a directory, not a file: %s", filePath)), nil
@@ -78,9 +79,12 @@ func NewWriteTool(
 						filePath, modTime.Format(time.RFC3339), lastRead.Format(time.RFC3339))), nil
 				}
 
-				oldContent, readErr := os.ReadFile(filePath)
-				if readErr == nil && string(oldContent) == params.Content {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("File %s already contains the exact content. No changes made.", filePath)), nil
+				oldBytes, readErr := os.ReadFile(filePath)
+				if readErr == nil {
+					oldContent = string(oldBytes)
+					if oldContent == params.Content {
+						return fantasy.NewTextErrorResponse(fmt.Sprintf("File %s already contains the exact content. No changes made.", filePath)), nil
+					}
 				}
 			} else if !os.IsNotExist(err) {
 				return fantasy.ToolResponse{}, fmt.Errorf("error checking file: %w", err)
@@ -89,14 +93,6 @@ func NewWriteTool(
 			dir := filepath.Dir(filePath)
 			if err = os.MkdirAll(dir, 0o755); err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error creating directory: %w", err)
-			}
-
-			oldContent := ""
-			if fileInfo != nil && !fileInfo.IsDir() {
-				oldBytes, readErr := os.ReadFile(filePath)
-				if readErr == nil {
-					oldContent = string(oldBytes)
-				}
 			}
 
 			diff, additions, removals := diff.GenerateDiff(
