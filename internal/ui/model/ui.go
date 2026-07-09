@@ -1737,7 +1737,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		cmds = append(cmds, m.disableDockerMCP)
 	case dialog.ActionInitializeProject:
 		if m.isAgentBusy() {
-			cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before summarizing session..."))
+			cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before initializing project..."))
 			break
 		}
 		cmds = append(cmds, m.initializeProject())
