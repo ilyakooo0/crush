@@ -134,7 +134,7 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 	case "image", "media":
 		if !GetSupportsImagesFromContext(ctx) {
 			modelName := GetModelNameFromContext(ctx)
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("This model (%s) does not support image data.", modelName)), nil
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("this model (%s) does not support image data.", modelName)), nil
 		}
 
 		var response fantasy.ToolResponse

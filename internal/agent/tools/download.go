@@ -67,7 +67,7 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 		downloadDescription(),
 		func(ctx context.Context, params DownloadParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.URL == "" {
-				return fantasy.NewTextErrorResponse("URL parameter is required"), nil
+				return fantasy.NewTextErrorResponse("url parameter is required"), nil
 			}
 
 			if params.FilePath == "" {
@@ -75,7 +75,7 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 			}
 
 			if !strings.HasPrefix(params.URL, "http://") && !strings.HasPrefix(params.URL, "https://") {
-				return fantasy.NewTextErrorResponse("URL must start with http:// or https://"), nil
+				return fantasy.NewTextErrorResponse("url must start with http:// or https://"), nil
 			}
 
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
@@ -131,7 +131,7 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Request failed with status code: %d", resp.StatusCode)), nil
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("request failed with status code: %d", resp.StatusCode)), nil
 			}
 
 			// Create parent directories if they don't exist

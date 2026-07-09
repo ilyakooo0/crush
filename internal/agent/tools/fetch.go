@@ -60,16 +60,16 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 		fetchDescription(),
 		func(ctx context.Context, params FetchParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.URL == "" {
-				return fantasy.NewTextErrorResponse("URL parameter is required"), nil
+				return fantasy.NewTextErrorResponse("url parameter is required"), nil
 			}
 
 			format := strings.ToLower(params.Format)
 			if format != "text" && format != "markdown" && format != "html" {
-				return fantasy.NewTextErrorResponse("Format must be one of: text, markdown, html"), nil
+				return fantasy.NewTextErrorResponse("format must be one of: text, markdown, html"), nil
 			}
 
 			if !strings.HasPrefix(params.URL, "http://") && !strings.HasPrefix(params.URL, "https://") {
-				return fantasy.NewTextErrorResponse("URL must start with http:// or https://"), nil
+				return fantasy.NewTextErrorResponse("url must start with http:// or https://"), nil
 			}
 
 			sessionID := GetSessionFromContext(ctx)
@@ -124,19 +124,19 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Request failed with status code: %d", resp.StatusCode)), nil
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("request failed with status code: %d", resp.StatusCode)), nil
 			}
 
 			body, err := io.ReadAll(io.LimitReader(resp.Body, MaxFetchSize))
 			if err != nil {
-				return fantasy.NewTextErrorResponse("Failed to read response body: " + err.Error()), nil
+				return fantasy.NewTextErrorResponse("failed to read response body: " + err.Error()), nil
 			}
 
 			content := string(body)
 
 			validUTF8 := utf8.ValidString(content)
 			if !validUTF8 {
-				return fantasy.NewTextErrorResponse("Response content is not valid UTF-8"), nil
+				return fantasy.NewTextErrorResponse("response content is not valid UTF-8"), nil
 			}
 			contentType := resp.Header.Get("Content-Type")
 
@@ -145,7 +145,7 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 				if strings.Contains(contentType, "text/html") {
 					text, err := extractTextFromHTML(content)
 					if err != nil {
-						return fantasy.NewTextErrorResponse("Failed to extract text from HTML: " + err.Error()), nil
+						return fantasy.NewTextErrorResponse("failed to extract text from HTML: " + err.Error()), nil
 					}
 					content = text
 				}
@@ -154,7 +154,7 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 				if strings.Contains(contentType, "text/html") {
 					markdown, err := convertHTMLToMarkdown(content)
 					if err != nil {
-						return fantasy.NewTextErrorResponse("Failed to convert HTML to Markdown: " + err.Error()), nil
+						return fantasy.NewTextErrorResponse("failed to convert HTML to Markdown: " + err.Error()), nil
 					}
 					content = markdown
 				}
@@ -166,14 +166,14 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 				if strings.Contains(contentType, "text/html") {
 					doc, err := goquery.NewDocumentFromReader(strings.NewReader(content))
 					if err != nil {
-						return fantasy.NewTextErrorResponse("Failed to parse HTML: " + err.Error()), nil
+						return fantasy.NewTextErrorResponse("failed to parse HTML: " + err.Error()), nil
 					}
 					body, err := doc.Find("body").Html()
 					if err != nil {
-						return fantasy.NewTextErrorResponse("Failed to extract body from HTML: " + err.Error()), nil
+						return fantasy.NewTextErrorResponse("failed to extract body from HTML: " + err.Error()), nil
 					}
 					if body == "" {
-						return fantasy.NewTextErrorResponse("No body content found in HTML"), nil
+						return fantasy.NewTextErrorResponse("no body content found in HTML"), nil
 					}
 					content = "<html>\n<body>\n" + body + "\n</body>\n</html>"
 				}

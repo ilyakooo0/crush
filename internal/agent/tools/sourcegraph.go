@@ -64,7 +64,7 @@ func NewSourcegraphTool(client *http.Client) fantasy.AgentTool {
 		sourcegraphDescription(),
 		func(ctx context.Context, params SourcegraphParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.Query == "" {
-				return fantasy.NewTextErrorResponse("Query parameter is required"), nil
+				return fantasy.NewTextErrorResponse("query parameter is required"), nil
 			}
 
 			if params.Count <= 0 {
@@ -129,10 +129,10 @@ func NewSourcegraphTool(client *http.Client) fantasy.AgentTool {
 			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
 				if len(body) > 0 {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("Request failed with status code: %d, response: %s", resp.StatusCode, string(body))), nil
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("request failed with status code: %d, response: %s", resp.StatusCode, string(body))), nil
 				}
 
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Request failed with status code: %d", resp.StatusCode)), nil
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("request failed with status code: %d", resp.StatusCode)), nil
 			}
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
@@ -146,7 +146,7 @@ func NewSourcegraphTool(client *http.Client) fantasy.AgentTool {
 
 			formattedResults, err := formatSourcegraphResults(result, params.ContextWindow)
 			if err != nil {
-				return fantasy.NewTextErrorResponse("Failed to format results: " + err.Error()), nil
+				return fantasy.NewTextErrorResponse("failed to format results: " + err.Error()), nil
 			}
 
 			return fantasy.NewTextResponse(formattedResults), nil
