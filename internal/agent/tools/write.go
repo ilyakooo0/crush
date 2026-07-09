@@ -105,6 +105,11 @@ func NewWriteTool(
 				strings.TrimPrefix(filePath, workingDir),
 			)
 
+			description := fmt.Sprintf("Create file %s", filePath)
+			if fileInfo != nil && !fileInfo.IsDir() {
+				description = fmt.Sprintf("Overwrite file %s", filePath)
+			}
+
 			p, err := permissions.Request(
 				ctx,
 				permission.CreatePermissionRequest{
@@ -113,7 +118,7 @@ func NewWriteTool(
 					ToolCallID:  call.ID,
 					ToolName:    WriteToolName,
 					Action:      "write",
-					Description: fmt.Sprintf("Create file %s", filePath),
+					Description: description,
 					Params: WritePermissionsParams{
 						FilePath:   filePath,
 						OldContent: oldContent,
