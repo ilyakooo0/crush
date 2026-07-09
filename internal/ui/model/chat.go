@@ -673,6 +673,18 @@ func (m *Chat) RemoveMessage(id string) {
 		return
 	}
 
+	// Clean up nested tool IDs that point to this item's index before
+	// removing it, so they don't end up pointing to a wrong item after
+	// the rebuild.
+	if item, ok := m.list.ItemAt(idx).(chat.MessageItem); ok {
+		if container, ok := item.(chat.NestedToolContainer); ok {
+			for _, nested := range container.NestedTools() {
+				delete(m.idInxMap, nested.ID())
+				delete(m.pausedAnimations, nested.ID())
+			}
+		}
+	}
+
 	// Remove from list
 	m.list.RemoveItem(idx)
 
@@ -683,6 +695,12 @@ func (m *Chat) RemoveMessage(id string) {
 	for i := idx; i < m.list.Len(); i++ {
 		if item, ok := m.list.ItemAt(i).(chat.MessageItem); ok {
 			m.idInxMap[item.ID()] = i
+			// Also update nested tool IDs for containers.
+			if container, ok := item.(chat.NestedToolContainer); ok {
+				for _, nested := range container.NestedTools() {
+					m.idInxMap[nested.ID()] = i
+				}
+			}
 		}
 	}
 
