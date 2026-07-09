@@ -608,14 +608,32 @@ func (m *UI) updateNotificationBackend() {
 }
 
 // shouldSendNotification returns true if notifications should be sent based on
-// current state. Focus reporting must be supported, window must not be
-// focused, and notifications must not be disabled in config.
+// current state. The window must not be focused and notifications must not be
+// disabled in config. Focus reporting is only required in auto-detection mode:
+// when the user explicitly chooses a notification style, we honor it even on
+// terminals that don't support focus events (e.g. SSH sessions).
 func (m *UI) shouldSendNotification() bool {
 	cfg := m.com.Config()
-	if cfg != nil && cfg.Options != nil && cfg.Options.NotificationStyle == "disabled" {
+	var style string
+	if cfg != nil && cfg.Options != nil {
+		style = cfg.Options.NotificationStyle
+	}
+	if style == "disabled" {
 		return false
 	}
-	return m.caps.ReportFocusEvents && !m.notifyWindowFocused
+	// Never notify while the window is focused. On terminals without focus
+	// reporting, notifyWindowFocused stays false, so this doesn't suppress.
+	if m.notifyWindowFocused {
+		return false
+	}
+	// An explicit style (anything other than auto/empty) is honored regardless
+	// of focus event support.
+	if style != "" && style != "auto" {
+		return true
+	}
+	// Auto-detection mode: without focus events we can't suppress notifications
+	// while focused, so we disable them entirely to avoid spamming the user.
+	return m.caps.ReportFocusEvents
 }
 
 // setState changes the UI state and focus.
