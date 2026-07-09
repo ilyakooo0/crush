@@ -968,9 +968,17 @@ func formatSize(bytes int) string {
 	)
 	switch {
 	case bytes >= mb:
-		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(mb))
+		result := fmt.Sprintf("%.1f MB", float64(bytes)/float64(mb))
+		if strings.HasSuffix(result, ".0 MB") {
+			result = strings.Replace(result, ".0 MB", " MB", 1)
+		}
+		return result
 	case bytes >= kb:
-		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(kb))
+		result := fmt.Sprintf("%.1f KB", float64(bytes)/float64(kb))
+		if strings.HasSuffix(result, ".0 KB") {
+			result = strings.Replace(result, ".0 KB", " KB", 1)
+		}
+		return result
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
